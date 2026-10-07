@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>店表作业调度系统</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #eef0f3;
+    color: #1f2329;
+    font: 13px/1.5 "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  }
+  a { color: #0b5cab; text-decoration: none; }
+  #top {
+    height: 48px;
+    background: #0f3d66;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+  }
+  #top .sys { font-size: 15px; font-weight: 600; }
+  #top .sys small { font-weight: 400; margin-left: 10px; color: #c5d4e3; }
+  #top .right { color: #d7e3ee; font-variant-numeric: tabular-nums; }
+  #bar {
+    background: #fff;
+    border-bottom: 1px solid #d9dde3;
+    padding: 8px 16px;
+    display: flex;
+    gap: 24px;
+    color: #5c6570;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  #bar b { color: #1f2329; font-weight: 600; }
+  html { overflow-anchor: none; }
+  .wrap { padding: 12px 16px 20px; }
+  .row { display: flex; gap: 12px; margin-bottom: 12px; }
+  .row.eq > * { flex: 1; }
+  .card {
+    background: #fff;
+    border: 1px solid #d9dde3;
+  }
+  .hd {
+    height: 36px;
+    padding: 0 12px;
+    border-bottom: 1px solid #e7eaee;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .hd span { font-weight: 400; color: #6b7380; font-size: 12px; }
+  .bd { padding: 10px 12px; }
+  .sv { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .sv .card { padding: 10px 12px; }
+  .sv .n { color: #6b7380; font-size: 12px; }
+  .sv .v { margin-top: 4px; font-size: 14px; font-weight: 600; }
+  .sv .p { margin-top: 2px; color: #8a929c; font-size: 12px; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th {
+    text-align: left;
+    font-weight: 600;
+    color: #5c6570;
+    background: #f7f8fa;
+    border-bottom: 1px solid #e7eaee;
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+  td { border-bottom: 1px solid #eef0f3; padding: 7px 8px; vertical-align: middle; }
+  tr.sel td { background: #f3f8fc; }
+  .tag {
+    display: inline-block;
+    min-width: 48px;
+    text-align: center;
+    font-size: 12px;
+    padding: 1px 6px;
+    border: 1px solid transparent;
+  }
+  .tag.run { color: #0b5cab; background: #e8f3fb; border-color: #c5dff0; }
+  .tag.done { color: #2b7a4b; background: #e9f6ee; border-color: #c8e6d2; }
+  .tag.fail { color: #b42318; background: #fdecea; border-color: #f3c4c0; }
+  .tag.wait { color: #8a5b12; background: #fbf3e4; border-color: #ead7b0; }
+  .tag.idle { color: #6b7380; background: #f4f5f7; border-color: #e2e5ea; }
+  .dot { color: #0b5cab; margin-right: 4px; }
+  .dot.off { color: #b42318; }
+  .dot.ok { color: #2b7a4b; }
+  .muted { color: #6b7380; }
+  .path { font-size: 12px; color: #5c6570; word-break: break-all; }
+  .track {
+    height: 6px;
+    background: #e8eaee;
+    width: 100px;
+  }
+  .track i { display: block; height: 6px; background: #0b5cab; width: 0; }
+  pre {
+    margin: 0;
+    height: 280px;
+    overflow: auto;
+    background: #f7f8fa;
+    padding: 8px 10px;
+    font: 12px/1.45 Consolas, "Sarasa Mono SC", "Microsoft YaHei UI", monospace;
+    color: #2a3038;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  #term-wrap { margin-top: 12px; }
+  #term-wrap { margin-top: 12px; margin-bottom: 12px; }
+  #term-procs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 36px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #e7eaee;
+    background: #f7f8fa;
+  }
+  .proc {
+    font-size: 12px;
+    padding: 4px 8px;
+    border: 1px solid #e2e5ea;
+    background: #fff;
+    color: #2a3038;
+  }
+  .proc .pid { color: #6b7380; margin-left: 6px; font-variant-numeric: tabular-nums; }
+  .proc.off { color: #8a929c; background: #f4f5f7; }
+  #term {
+    margin: 0;
+    height: 360px;
+    overflow: auto;
+    overflow-anchor: none;
+    background: #fff;
+    color: #2a3038;
+    padding: 10px 12px;
+    font: 12px/1.5 Consolas, "Sarasa Mono SC", "Microsoft YaHei UI", monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  #term .ln { display: block; }
+  #term .ts { color: #6b7380; }
+  #term .s-链路 { color: #0b5cab; font-weight: 600; }
+  #term .s-收集 { color: #2b7a4b; font-weight: 600; }
+  #term .s-监视 { color: #5b4b8a; font-weight: 600; }
+  .tabs { display: flex; border-bottom: 1px solid #e7eaee; }
+  .tabs a {
+    padding: 8px 14px;
+    color: #5c6570;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .tabs a.on { color: #0f3d66; font-weight: 600; border-bottom-color: #0f3d66; }
+  .col { display: flex; flex-direction: column; min-width: 0; }
+  .grow { flex: 1; }
+  .scroll { max-height: 280px; overflow: auto; }
+  #nav {
+    background: #fff;
+    border-bottom: 1px solid #d9dde3;
+    padding: 0 16px;
+    display: flex;
+    gap: 4px;
+  }
+  #nav a {
+    padding: 8px 12px;
+    color: #5c6570;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  #nav a.on { color: #0f3d66; font-weight: 600; border-bottom-color: #0f3d66; }
+  .hide { display: none !important; }
+  .form-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+  .form-row label { display: block; color: #6b7380; font-size: 12px; margin-bottom: 4px; }
+  .form-row input[type=text] {
+    border: 1px solid #d9dde3;
+    padding: 6px 8px;
+    font: 13px/1.4 inherit;
+    min-width: 220px;
+    background: #fff;
+  }
+  .btn {
+    border: 1px solid #0f3d66;
+    background: #0f3d66;
+    color: #fff;
+    padding: 6px 12px;
+    font: 13px inherit;
+    cursor: pointer;
+  }
+  .btn.ghost { background: #fff; color: #0f3d66; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  #set-msg, #pipe-msg { margin-left: 10px; color: #2b7a4b; }
+  #set-msg.err, #pipe-msg.err { color: #b42318; }
+  #shop-tb input[type=text] { min-width: 120px; width: 100%; box-sizing: border-box; }
+  .form-row input[type=text].wide { min-width: 420px; width: min(720px, 92vw); }
+  .form-row input[type=text].short { min-width: 96px; width: 110px; }
+  .chk-row { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }
+  .chk-row label { display: flex; align-items: flex-start; gap: 8px; color: #2a3038; font-size: 13px; cursor: pointer; }
+  .chk-row input { margin-top: 3px; }
+  .chk-row .hint { color: #6b7380; font-size: 12px; margin-left: 22px; }
+  .sec-note { color: #6b7380; font-size: 12px; margin: 0 0 10px; }
+</style>
+</head>
+<body>
+<div id="top">
+  <div class="sys">店表作业调度系统 <small>本机监视 · 飞书与链路可改</small></div>
+  <div class="right" id="clock">—</div>
+</div>
+<div id="nav">
+  <a class="on" data-page="job">作业</a>
+  <a data-page="set">飞书设置</a>
+  <a data-page="pipe">链路设置</a>
+</div>
+<div id="bar"></div>
+<div id="page-job" class="wrap">
+  <div class="sv" id="svc"></div>
+  <div class="row">
+    <div class="card grow">
+      <div class="hd">作业流水 <span id="job-h"></span></div>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:40px">序号</th>
+              <th style="width:88px">工序</th>
+              <th style="width:70px">状态</th>
+              <th style="width:140px">任务 / 接口</th>
+              <th>说明</th>
+              <th style="width:120px">进度</th>
+              <th style="width:70px">完成率</th>
+              <th style="width:90px">成功 / 失败</th>
+              <th style="width:120px">备注</th>
+            </tr>
+          </thead>
+          <tbody id="jobs"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="row eq">
+    <div class="card col">
+      <div class="hd">自然日店表 <span id="st-h"></span></div>
+      <div class="bd path" id="st-p"></div>
+      <div class="scroll grow">
+        <table>
+          <thead><tr><th>文件名</th><th style="width:80px">大小</th><th style="width:120px">修改时间</th><th style="width:70px">纳入匹配</th></tr></thead>
+          <tbody id="stores"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card col">
+      <div class="hd"><span id="af-title">截止后归档 / 次日目录</span> <span id="af-h"></span></div>
+      <div class="bd path" id="af-p"></div>
+      <div class="scroll grow">
+        <table>
+          <thead><tr><th>文件名</th><th style="width:80px">大小</th><th style="width:120px">修改时间</th></tr></thead>
+          <tbody id="after"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card col">
+      <div class="hd">当天查出 <span id="fd-h"></span></div>
+      <div class="bd path" id="fd-p"></div>
+      <div class="scroll grow">
+        <table>
+          <thead><tr><th>文件名</th><th style="width:80px">大小</th><th style="width:120px">修改时间</th></tr></thead>
+          <tbody id="founds"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card col">
+      <div class="hd">匹配产出 <span id="out-h"></span></div>
+      <div class="bd path" id="out-p"></div>
+      <div class="scroll grow">
+        <table>
+          <thead><tr><th>文件名</th><th style="width:80px">大小</th><th style="width:120px">修改时间</th></tr></thead>
+          <tbody id="outs"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="row eq">
+    <div class="card">
+      <div class="hd">核验引擎</div>
+      <table>
+        <thead>
+          <tr>
+            <th>引擎</th><th>状态</th><th>阶段</th><th>进度</th>
+            <th title="邮箱=有效；iMessage=iMessage；WhatsApp=有号；Apple=是 Apple ID">命中</th>
+            <th title="邮箱=无效；iMessage=仅短信；WhatsApp/Apple=否">否定</th>
+            <th>未判定</th><th>最近日志</th>
+          </tr>
+        </thead>
+        <tbody id="eng"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card" id="term-wrap">
+    <div class="hd">终端汇总 <span id="term-h">把收集、链路、核验的日志和进程合到一屏</span></div>
+    <div id="term-procs"></div>
+    <div class="tabs">
+      <a class="on" data-t="all">全部</a>
+      <a data-t="链路">链路 / 核验</a>
+      <a data-t="收集">收集</a>
+      <a data-t="pipe">仅 pipeline.log</a>
+      <a data-t="col">仅 collect.log</a>
+    </div>
+    <pre id="term"></pre>
+  </div>
+</div>
+<div id="page-set" class="wrap hide">
+  <div class="card" style="margin-bottom:12px">
+    <div class="hd">推送与告警 <span>表格仍走 ZIP 机器人；报错只走告警机器人私聊，不进群</span></div>
+    <div class="bd">
+      <div class="form-row">
+        <div>
+          <label>详细地址推送给</label>
+          <input id="set-enhance" type="text" placeholder="飞书姓名，如 17.">
+        </div>
+        <div>
+          <label>汇总A发给</label>
+          <input id="set-summary-a" type="text" placeholder="飞书姓名，如 李飞">
+        </div>
+        <div>
+          <label>表格抄送（逗号分隔）</label>
+          <input id="set-copy" type="text" placeholder="DZ">
+        </div>
+        <div>
+          <label>报错发给（逗号分隔）</label>
+          <input id="set-alert" type="text" placeholder="用户703027">
+        </div>
+      </div>
+      <div class="muted" id="set-apps">—</div>
+      <div style="margin-top:10px">
+        <button class="btn" id="btn-save" type="button">保存对照</button>
+        <button class="btn ghost" id="btn-alert" type="button">测发一条报错</button>
+        <span id="set-msg"></span>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="hd">店名对照 <span>一店多人 / 一人多店均可；也可用逗号写在一格</span>
+      <button class="btn ghost" id="btn-add" type="button">加一行</button>
+    </div>
+    <div class="bd muted" style="padding-top:0">例：V店→李文佳、袁美丽；或 B店,C店→靳淼</div>
+    <div class="scroll" style="max-height:420px">
+      <table>
+        <thead><tr><th>店名（可逗号多店）</th><th>飞书姓名（可逗号多人）</th><th style="width:70px"></th></tr></thead>
+        <tbody id="shop-tb"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<div id="page-pipe" class="wrap hide">
+  <div class="card" style="margin-bottom:12px">
+    <div class="hd">时间窗口 <span>收集截止、核验等到点；改后需重启日更才完全生效</span></div>
+    <div class="bd">
+      <div class="form-row">
+        <div>
+          <label>收集截止</label>
+          <input id="p-collect-cutoff" class="short" type="text" placeholder="09:30">
+        </div>
+        <div>
+          <label>核验开始</label>
+          <input id="p-found-cutoff" class="short" type="text" placeholder="17:40">
+        </div>
+        <div>
+          <label>查出午间点（时）</label>
+          <input id="p-noon" class="short" type="text" placeholder="12">
+        </div>
+        <div>
+          <label>查出规则起始日</label>
+          <input id="p-rule-start" class="short" type="text" placeholder="2026-10-01">
+        </div>
+        <div>
+          <label>收集轮询（秒）</label>
+          <input id="p-poll" class="short" type="text" placeholder="2">
+        </div>
+        <div>
+          <label>文件稳定（秒）</label>
+          <input id="p-stable" class="short" type="text" placeholder="1.2">
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:12px">
+    <div class="hd">目录路径 <span>微信 / 待收集 / 原始与匹配落盘</span></div>
+    <div class="bd">
+      <div class="form-row">
+        <div>
+          <label>微信根目录</label>
+          <input id="p-wechat" class="wide" type="text">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>待收集</label>
+          <input id="p-drop" class="wide" type="text">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>原始数据</label>
+          <input id="p-dest" class="wide" type="text">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>原始地址（详细地址归档）</label>
+          <input id="p-enhance" class="wide" type="text">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>匹配数据</label>
+          <input id="p-match" class="wide" type="text">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>店表必填列（逗号分隔）</label>
+          <input id="p-headers" class="wide" type="text" placeholder="店铺，买家全名，城市，州，邮编">
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:12px">
+    <div class="hd">匹配与并发 <span>本机服务地址、EXE、邮箱并发</span></div>
+    <div class="bd">
+      <div class="form-row">
+        <div>
+          <label>匹配服务 URL</label>
+          <input id="p-match-url" type="text" placeholder="http://127.0.0.1:5000">
+        </div>
+        <div>
+          <label>核验服务 URL</label>
+          <input id="p-detect-url" type="text" placeholder="http://127.0.0.1:8848">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>匹配 EXE</label>
+          <input id="p-match-exe" class="wide" type="text">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>核验 EXE</label>
+          <input id="p-detect-exe" class="wide" type="text">
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>匹配模式</label>
+          <input id="p-mode" class="short" type="text" placeholder="2">
+        </div>
+        <div>
+          <label>邮箱并发</label>
+          <input id="p-conc" class="short" type="text" placeholder="50">
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:12px">
+    <div class="hd">推送与跳过开关 <span>飞书推送下次发送生效；跳过合并影响日更</span></div>
+    <div class="bd">
+      <div class="chk-row">
+        <label><input id="p-push" type="checkbox"> 核验后推飞书</label>
+        <div class="hint">关则只落盘精简包，不推店表 / 汇总</div>
+        <label><input id="p-as-zip" type="checkbox"> 按人打成 ZIP 推送</label>
+        <div class="hint">关则每人逐张 xlsx 发送</div>
+        <label><input id="p-skip-tri" type="checkbox"> 已有成功包则跳过再合并</label>
+        <div class="hint">关则每次都会重新三源合并 / 下载</div>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="hd">保存 <span>写入 config.json；时间 / 路径 / 并发建议重启日更</span></div>
+    <div class="bd">
+      <p class="sec-note">Secret、open_id 不在本页改。飞书姓名对照请用「飞书设置」。</p>
+      <button class="btn" id="btn-pipe-save" type="button">保存链路设置</button>
+      <button class="btn ghost" id="btn-pipe-restart" type="button">重启日更</button>
+      <span id="pipe-msg"></span>
+    </div>
+  </div>
+</div>
+<script>
+const API = (location.port === "8765" ? "" : "http://127.0.0.1:8765");
+const ST = { idle: "未开始", wait: "等待", run: "运行中", done: "已完成", fail: "失败" };
+const CH = { idle: "空闲", run: "作业进行中", wait: "等待核验点", done: "当日作业完成", fail: "作业失败" };
+let TAB = "all", DATA = null, TERM_PIN = true, TERM_FP = "", PROC_FP = "";
+async function api(path, opt) {
+  const init = Object.assign({ cache: "no-store" }, opt || {});
+  const r = await fetch(API + path, init);
+  const text = await r.text();
+  let d = null;
+  try { d = text ? JSON.parse(text) : {}; }
+  catch (e) {
+    throw new Error("接口不是 JSON，请打开 http://127.0.0.1:8765/ 再试（勿用本地预览/文件打开）");
+  }
+  if (!r.ok) throw new Error((d && d.error) || ("HTTP " + r.status));
+  return d;
+}
+
+function setHtml(el, html) {
+  if (el.getAttribute("data-fp") === html) return false;
+  el.setAttribute("data-fp", html);
+  el.innerHTML = html;
+  return true;
+}
+function tag(s) { return '<span class="tag ' + s + '">' + (ST[s] || s) + "</span>"; }
+function empty(id, msg) {
+  document.getElementById(id).innerHTML = '<tr><td colspan="8" class="muted">' + msg + "</td></tr>";
+}
+function files(id, rows, withSkip) {
+  const tb = document.getElementById(id);
+  const html = (!rows || !rows.length)
+    ? '<tr><td colspan="4" class="muted">目录为空</td></tr>'
+    : rows.map(r => {
+        const keep = withSkip ? (r.skip ? "否" : "是") : "";
+        return "<tr><td>" + r.name + "</td><td>" + r.size_h + "</td><td>" + r.mtime + "</td>" +
+          (withSkip ? "<td>" + keep + "</td>" : "") + "</tr>";
+      }).join("");
+  setHtml(tb, html);
+}
+function esc(s) {
+  return String(s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+function draw(d) {
+  DATA = d;
+  document.getElementById("clock").textContent = d.time + "　星期" + d.weekday;
+  document.getElementById("bar").innerHTML =
+    "业务日 <b>" + d.calendar + "</b>　收集截止 <b>" + d.cutoff + "</b>　当前归档 <b>" + d.archive +
+    "</b>　当前工序 <b>" + d.active + "</b>　作业状态 <b>" + (CH[d.chain] || d.chain) +
+    "</b>　日志延迟 <b>" + (d.pipe_age == null ? "—" : d.pipe_age + " s") +
+    "</b>　邮箱并发 <b>" + d.concurrency + "</b>　刷新 2s";
+  const c = d.collect || {}, m = d.matching || {}, v = d.detect || {}, f = d.feishu || {};
+  const svcHtml = [
+    ["微信收集", c.daemon ? "在线" : "未启动", c.daemon ? "ok" : "off",
+     "进程 " + (c.daemon_pid || "无") + "　守护 " + (c.supervise ? c.supervise_pid : "未启动")],
+    ["数据匹配", m.up ? "连通" : "未连通", m.up ? "ok" : "off", m.url || ""],
+    ["核验系统", v.up ? "连通" : "未连通", v.up ? "ok" : "off", v.url || ""],
+    ["飞书推送", f.app ? ((f.shops || 0) + " 家店对照") : "未配置", f.app ? "ok" : "off",
+     (f.note || "私聊不进群") + (f.alert ? "" : "")]
+  ].map(x => '<div class="card"><div class="n">' + x[0] + '</div><div class="v"><span class="dot ' + x[2] + '">●</span>' + x[1] + '</div><div class="p">' + x[3] + "</div></div>").join("");
+  setHtml(document.getElementById("svc"), svcHtml);
+  document.getElementById("job-h").textContent = (d.jobs || []).length + " 步";
+  const jobsHtml = (d.jobs || []).map(j => {
+    const p = j.tot ? (j.cur + " / " + j.tot) : "—";
+    const bar = j.tot ? '<div class="track"><i style="width:' + j.pct + '%"></i></div>' : "—";
+    const cls = j.state === "run" ? "sel" : "";
+    return '<tr class="' + cls + '"><td>' + j.no + "</td><td>" + j.name + "</td><td>" + tag(j.state) +
+      "</td><td>" + (j.id || "—") + "</td><td>" + (j.note || "—") + "</td><td>" + p + "</td><td>" + bar +
+      "</td><td>" + (j.tot ? (j.ok + " / " + j.fail) : "—") + "</td><td class='muted'>" + (j.extra || "") + "</td></tr>";
+  }).join("");
+  setHtml(document.getElementById("jobs"), jobsHtml);
+  document.getElementById("st-h").textContent = (d.stores || []).filter(x => !x.skip).length + " 张店表 / " + (d.stores || []).length + " 个文件";
+  document.getElementById("st-p").textContent = d.cal_path;
+  document.getElementById("af-title").textContent = d.cutoff + " 后归档 / 次日目录";
+  document.getElementById("af-h").textContent = (d.afternoon || []).length + " 个文件";
+  document.getElementById("af-p").textContent = d.arc_path;
+  document.getElementById("fd-h").textContent = (d.found || []).length + " 张";
+  document.getElementById("fd-p").textContent = d.match_path ? (d.match_path + "\\收表汇总") : "";
+  document.getElementById("out-h").textContent = (d.outputs || []).length + " 个文件";
+  document.getElementById("out-p").textContent = d.match_path;
+  files("stores", d.stores, true);
+  files("after", d.afternoon, false);
+  files("founds", d.found, false);
+  files("outs", d.outputs, false);
+  const engHtml = (d.engines || []).map(e =>
+    "<tr><td>" + e.name + "</td><td>" + tag(e.state) + "</td><td>" + e.phase + "</td><td>" +
+    (e.tot ? (e.cur + "/" + e.tot + "　" + e.pct + "%") : "—") + "</td><td>" + e.ok + "</td><td>" + e.fail +
+    "</td><td>" + e.unk + "</td><td class='muted'>" + (e.log || "—") + "</td></tr>"
+  ).join("");
+  setHtml(document.getElementById("eng"), engHtml);
+  const live = (d.terminals || []).filter(t => t.alive).length;
+  document.getElementById("term-h").textContent = live + " 个进程在线 / " + (d.terminals || []).length + " 个";
+  const procHtml = (d.terminals || []).length
+    ? d.terminals.map(t => {
+        const on = t.alive ? "ok" : "off";
+        return '<div class="proc ' + (t.alive ? "" : "off") + '"><span class="dot ' + on + '">●</span>' +
+          esc(t.name) + '<span class="pid">' + (t.pid || "—") + "</span>　" + esc(t.cmd || "") + "</div>";
+      }).join("")
+    : '<div class="muted">没有扫到 python / pythonw 作业进程</div>';
+  if (procHtml !== PROC_FP) {
+    PROC_FP = procHtml;
+    document.getElementById("term-procs").innerHTML = procHtml;
+  }
+  showLog();
+}
+function showLog(force) {
+  if (!DATA) return;
+  const box = document.getElementById("term");
+  let html = "";
+  if (TAB === "pipe") {
+    html = esc((DATA.log || []).join("\n") || "暂无 pipeline.log");
+  } else if (TAB === "col") {
+    html = esc((DATA.collect_log || []).join("\n") || "暂无 collect.log");
+  } else {
+    const rows = (DATA.console || []).filter(r => TAB === "all" || r.src === TAB);
+    html = rows.map(r =>
+      '<span class="ln"><span class="ts">' + esc(r.ts || "") +
+      '</span> <span class="s-' + esc(r.src) + '">[' + esc(r.src) + "]</span> " +
+      esc(r.text) + "</span>"
+    ).join("") || '<span class="muted">暂无记录</span>';
+  }
+  if (!force && html === TERM_FP) return;
+  const pin = TERM_PIN || (box.scrollHeight - box.scrollTop - box.clientHeight < 48);
+  const keep = box.scrollTop;
+  const oldH = box.scrollHeight;
+  TERM_FP = html;
+  box.innerHTML = html;
+  if (pin) box.scrollTop = box.scrollHeight;
+  else box.scrollTop = keep + Math.max(0, box.scrollHeight - oldH);
+}
+document.querySelectorAll(".tabs a").forEach(a => a.onclick = () => {
+  document.querySelectorAll(".tabs a").forEach(x => x.classList.remove("on"));
+  a.classList.add("on");
+  TAB = a.dataset.t;
+  TERM_PIN = true;
+  TERM_FP = "";
+  showLog(true);
+});
+document.getElementById("term").addEventListener("scroll", () => {
+  const box = document.getElementById("term");
+  TERM_PIN = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+});
+function setMsg(text, err) {
+  const el = document.getElementById("set-msg");
+  el.textContent = text || "";
+  el.className = err ? "err" : "";
+}
+function pipeMsg(text, err) {
+  const el = document.getElementById("pipe-msg");
+  el.textContent = text || "";
+  el.className = err ? "err" : "";
+}
+function shopRows() {
+  return [...document.querySelectorAll("#shop-tb tr")].map(tr => ({
+    shop: (tr.querySelector(".s-shop") || {}).value || "",
+    user: (tr.querySelector(".s-user") || {}).value || "",
+  })).filter(r => r.shop.trim() && r.user.trim());
+}
+function addShopRow(shop, user) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = '<td><input class="s-shop" type="text" placeholder="B店 或 B店,C店" value="' + esc(shop || "") +
+    '"></td><td><input class="s-user" type="text" placeholder="姓名 或 张三,李四" value="' + esc(user || "") +
+    '"></td><td><a href="#" class="s-del">删除</a></td>';
+  tr.querySelector(".s-del").onclick = ev => { ev.preventDefault(); tr.remove(); };
+  document.getElementById("shop-tb").appendChild(tr);
+}
+async function loadSettings() {
+  const d = await api("/api/feishu-settings");
+  document.getElementById("set-enhance").value = d.enhance_to || "";
+  document.getElementById("set-summary-a").value = d.summary_a_to || "";
+  document.getElementById("set-copy").value = (d.copy_to || []).join("，");
+  document.getElementById("set-alert").value = (d.alert_to || []).join("，");
+  document.getElementById("set-apps").textContent =
+    (d.push_on ? "表格机器人已配置" : "表格机器人未配置") + "　" +
+    (d.alert_on ? ("告警机器人 " + (d.alert_app_id || "已配置")) : "告警机器人未配置");
+  document.getElementById("shop-tb").innerHTML = "";
+  (d.shops || []).forEach(x => addShopRow(x.shop, x.user));
+}
+async function loadPipeSettings() {
+  const d = await api("/api/pipeline-settings");
+  document.getElementById("p-collect-cutoff").value = d.collect_cutoff || "";
+  document.getElementById("p-found-cutoff").value = d.found_cutoff || "";
+  document.getElementById("p-noon").value = d.found_noon_hour != null ? d.found_noon_hour : "";
+  document.getElementById("p-rule-start").value = d.found_rule_start || "";
+  document.getElementById("p-poll").value = d.poll_seconds != null ? d.poll_seconds : "";
+  document.getElementById("p-stable").value = d.stable_seconds != null ? d.stable_seconds : "";
+  document.getElementById("p-wechat").value = d.wechat_root || "";
+  document.getElementById("p-drop").value = d.drop_dir || "";
+  document.getElementById("p-dest").value = d.dest_root || "";
+  document.getElementById("p-enhance").value = d.enhance_archive_root || "";
+  document.getElementById("p-match").value = d.match_dest_root || "";
+  document.getElementById("p-headers").value = d.need_headers || "";
+  document.getElementById("p-match-url").value = d.matching_url || "";
+  document.getElementById("p-detect-url").value = d.detect_url || "";
+  document.getElementById("p-match-exe").value = d.matching_exe || "";
+  document.getElementById("p-detect-exe").value = d.detect_exe || "";
+  document.getElementById("p-mode").value = d.matching_mode || "";
+  document.getElementById("p-conc").value = d.email_sd_concurrency != null ? d.email_sd_concurrency : "";
+  document.getElementById("p-push").checked = !!d.feishu_push_after_detect;
+  document.getElementById("p-as-zip").checked = !!d.feishu_shop_as_zip;
+  document.getElementById("p-skip-tri").checked = !!d.skip_tri_if_done;
+}
+function pipePayload() {
+  return {
+    collect_cutoff: document.getElementById("p-collect-cutoff").value,
+    found_cutoff: document.getElementById("p-found-cutoff").value,
+    found_noon_hour: document.getElementById("p-noon").value,
+    found_rule_start: document.getElementById("p-rule-start").value,
+    poll_seconds: document.getElementById("p-poll").value,
+    stable_seconds: document.getElementById("p-stable").value,
+    wechat_root: document.getElementById("p-wechat").value,
+    drop_dir: document.getElementById("p-drop").value,
+    dest_root: document.getElementById("p-dest").value,
+    enhance_archive_root: document.getElementById("p-enhance").value,
+    match_dest_root: document.getElementById("p-match").value,
+    need_headers: document.getElementById("p-headers").value,
+    matching_url: document.getElementById("p-match-url").value,
+    detect_url: document.getElementById("p-detect-url").value,
+    matching_exe: document.getElementById("p-match-exe").value,
+    detect_exe: document.getElementById("p-detect-exe").value,
+    matching_mode: document.getElementById("p-mode").value,
+    email_sd_concurrency: document.getElementById("p-conc").value,
+    feishu_push_after_detect: document.getElementById("p-push").checked,
+    feishu_shop_as_zip: document.getElementById("p-as-zip").checked,
+    skip_tri_if_done: document.getElementById("p-skip-tri").checked,
+  };
+}
+function splitNames(s) {
+  return String(s || "").split(/[,，;；\s]+/).map(x => x.trim()).filter(Boolean);
+}
+document.querySelectorAll("#nav a").forEach(a => a.onclick = () => {
+  document.querySelectorAll("#nav a").forEach(x => x.classList.remove("on"));
+  a.classList.add("on");
+  const page = a.dataset.page;
+  document.getElementById("page-job").classList.toggle("hide", page !== "job");
+  document.getElementById("page-set").classList.toggle("hide", page !== "set");
+  document.getElementById("page-pipe").classList.toggle("hide", page !== "pipe");
+  document.getElementById("bar").classList.toggle("hide", page !== "job");
+  if (page === "set") loadSettings().catch(e => setMsg(String(e), true));
+  if (page === "pipe") loadPipeSettings().catch(e => pipeMsg(String(e), true));
+});
+document.getElementById("btn-add").onclick = () => addShopRow("", "");
+document.getElementById("btn-save").onclick = async () => {
+  setMsg("保存中…");
+  try {
+    await api("/api/feishu-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        shops: shopRows(),
+        enhance_to: document.getElementById("set-enhance").value,
+        summary_a_to: document.getElementById("set-summary-a").value,
+        copy_to: splitNames(document.getElementById("set-copy").value),
+        alert_to: splitNames(document.getElementById("set-alert").value),
+      }),
+    });
+    setMsg("已保存，下次推送生效");
+  } catch (e) { setMsg(String(e), true); }
+};
+document.getElementById("btn-alert").onclick = async () => {
+  setMsg("发送中…");
+  try {
+    await api("/api/feishu-test-alert", { method: "POST" });
+    setMsg("已测发，请在飞书搜告警机器人看私聊");
+  } catch (e) { setMsg(String(e), true); }
+};
+document.getElementById("btn-pipe-save").onclick = async () => {
+  pipeMsg("保存中…");
+  try {
+    await api("/api/pipeline-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(pipePayload()),
+    });
+    pipeMsg("已保存。时间 / 路径 / 并发请点「重启日更」");
+  } catch (e) { pipeMsg(String(e), true); }
+};
+document.getElementById("btn-pipe-restart").onclick = async () => {
+  if (!confirm("结束当前日更并按最新配置重新拉起？\n（匹配已完成时不必点，日更会在核验点自动继续）")) return;
+  pipeMsg("正在后台重启…");
+  try {
+    const d = await api("/api/restart-daily", { method: "POST" });
+    if (d.error) throw new Error(d.error);
+    pipeMsg(d.msg || "已在后台重启，几秒后回作业页看进程");
+  } catch (e) { pipeMsg(String(e), true); }
+};
+let TICKING = false;
+async function tick() {
+  if (TICKING) return;
+  TICKING = true;
+  try {
+    draw(await api("/api/snapshot"));
+  } catch (e) {
+    document.getElementById("clock").textContent = "监视服务未连接  http://127.0.0.1:8765";
+  } finally {
+    TICKING = false;
+  }
+}
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>
