@@ -280,6 +280,27 @@ def found_data_zip(dest: Path) -> Path | None:
     return max(hits, key=lambda p: p.stat().st_mtime)
 
 
+_DETECT_ZIP_SKIP = ("汇总", "核验表", "三源合并", "详细地址")
+
+
+def day_folder_detect_zips(dest: Path) -> list[Path]:
+    """当天匹配目录根下的输入 ZIP 都进核验。汇总等核验写回的包不收。"""
+    if not dest.is_dir():
+        return []
+    out: list[Path] = []
+    for p in dest.glob("*.zip"):
+        if not p.is_file():
+            continue
+        name = p.name
+        if any(k in name for k in _DETECT_ZIP_SKIP):
+            continue
+        low = name.lower()
+        if low.endswith(".import.zip") or low.endswith(".tmp.zip"):
+            continue
+        out.append(p)
+    return sorted(out, key=lambda x: x.name.lower())
+
+
 def match_folder_day(dest: Path) -> datetime:
     parts = dest.name.split(".")
     month, day = int(parts[0]), int(parts[-1])
@@ -301,14 +322,9 @@ def found_files(dest: Path) -> list[Path]:
 
 
 def found_new_before_noon(dest: Path, noon_hour: int) -> bool:
-    """只认当天新落到该目录的查出表。顺延/挪过来的旧表不算。"""
-    day = match_folder_day(dest)
-    noon = day.replace(hour=noon_hour, minute=0, second=0, microsecond=0)
-    for p in _found_xlsx(dest):
-        created = datetime.fromtimestamp(p.stat().st_ctime)
-        if created.date() == day.date() and created < noon:
-            return True
-    return False
+    """只认收集程序当天午间点前从微信/待收集收下的查出。手放到目录的不算。"""
+    from collect_wechat import found_auto_copied_before_noon
+    return found_auto_copied_before_noon(dest, noon_hour)
 
 
 def refresh_found_zip(dest: Path) -> Path | None:
@@ -317,7 +333,7 @@ def refresh_found_zip(dest: Path) -> Path | None:
 
 
 def wait_found_gate(cfg: dict, dest: Path) -> None:
-    """当天 12 点前有新增查出 → 立刻核验；没有 → 等到查出截止时刻。挪来或顺延的旧表不算新增。"""
+    """当天 12 点前有微信收下的新查出 → 立刻核验；手放到目录的等到查出截止。"""
     from collect_wechat import found_cutoff_hm, fmt_hm
     noon_h = int(cfg.get("found_noon_hour") or 12)
     six_h, six_m = found_cutoff_hm(cfg)
@@ -332,12 +348,12 @@ def wait_found_gate(cfg: dict, dest: Path) -> None:
             log(f"已到 {fmt_hm(six_h, six_m)}，开始核验", "有查出ZIP" if has else "无查出ZIP")
             return
         if early:
-            log(f"当天 {noon_h:02d}:00 前有新增查出，开始核验")
+            log(f"当天 {noon_h:02d}:00 前有微信收下的查出，开始核验")
             return
         if now < now.replace(hour=noon_h, minute=0, second=0, microsecond=0):
-            msg = f"{noon_h:02d}:00 前等待当天新增查出（顺延旧表不算）"
+            msg = f"{noon_h:02d}:00 前等待微信收下的查出（手放到目录的等到 {fmt_hm(six_h, six_m)}）"
         else:
-            msg = f"当天 {noon_h:02d}:00 前无新增查出，等到 {fmt_hm(six_h, six_m)} 再核验"
+            msg = f"当天 {noon_h:02d}:00 前无微信新查出，等到 {fmt_hm(six_h, six_m)} 再核验"
         if msg != last:
             log(msg)
             last = msg
@@ -385,6 +401,8 @@ def email_progress(http: requests.Session, base: str, engine: str) -> dict:
 
 
 def wait_email(http: requests.Session, base: str, engine: str, label: str) -> dict:
+    from stall import StallWatch
+    watch = StallWatch("detect", label)
     last = ""
     while True:
         s = email_progress(http, base, engine)
@@ -392,6 +410,7 @@ def wait_email(http: requests.Session, base: str, engine: str, label: str) -> di
         phase = s.get("phase") or ""
         msg = (f"{phase} {s.get('current', 0)}/{s.get('total', 0)} "
                f"有效{s.get('valid', 0)} 无效{s.get('invalid', 0)} {s.get('log') or ''}")
+        watch.tick((running, phase, s.get("current"), s.get("valid"), s.get("invalid"), s.get("done")))
         if msg != last:
             log(label, msg)
             last = msg
@@ -402,18 +421,28 @@ def wait_email(http: requests.Session, base: str, engine: str, label: str) -> di
         time.sleep(8)
 
 
-def run_api_precheck(http: requests.Session, base: str) -> dict:
+def run_api_precheck(http: requests.Session, base: str, cfg: dict | None = None) -> dict:
     log("工作台：API 预检")
-    pf = _ds(http.get(f"{base}/api/email/api-preview", timeout=30))
-    log(f"拆分 {pf.get('total')}  缓存命中 {pf.get('cache_hits')}  待送检 {pf.get('fresh')}")
+    from funds import wait_geeksend
+    while True:
+        pf = _ds(http.get(f"{base}/api/email/api-preview", timeout=30))
+        log(f"拆分 {pf.get('total')}  缓存命中 {pf.get('cache_hits')}  待送检 {pf.get('fresh')}")
+        fresh = int(pf.get("fresh") or 0)
+        if wait_geeksend(cfg or {}, http, base, fresh):
+            log("充值后重新预览 API 预检")
+            continue
+        break
     started = _ds(http.post(f"{base}/api/email/start-diff", json={"engine": "geeksend"}, timeout=60))
     if not started.get("success"):
         raise PipelineError(started.get("message") or "API 预检启动失败")
     log(started.get("message") or "已提交", "共", started.get("total"))
-    wait_email(http, base, "geeksend", "API预检")
+    wait_email(http, base, "geeksend", "邮箱预检")
     t0 = time.time()
     empty_rounds = 0
     last_pending = 0
+    leftover_alerted = False
+    from stall import StallWatch
+    watch = StallWatch("detect", "邮箱预检取回")
     while True:
         s = email_progress(http, base, "geeksend")
         if s.get("done") or (not s.get("pending_addresses") and not s.get("pending_batches")
@@ -421,14 +450,23 @@ def run_api_precheck(http: requests.Session, base: str) -> dict:
             log("API 预检完成", f"有效{s.get('valid', 0)} 无效{s.get('invalid', 0)} 未知{s.get('unknown', 0)}")
             return s
         if s.get("running"):
+            watch.tick(("running", s.get("current"), s.get("valid"), s.get("invalid")))
             time.sleep(8)
             continue
         if s.get("pending_addresses") or s.get("pending_batches") or s.get("phase") == "submitted":
             pending_n = int(s.get("pending_addresses") or last_pending or 0)
+            watch.tick(("pending", pending_n, empty_rounds))
             stale_small = empty_rounds >= 3 and 0 < pending_n < 5
             finalize = time.time() - t0 > 12 * 60 or stale_small
             if stale_small:
                 log(f"预检连续 {empty_rounds} 次取回 0 且剩余 {pending_n}＜5，收尾记未知")
+                if not leftover_alerted:
+                    leftover_alerted = True
+                    from send_feishu import alert_skip
+                    alert_skip(
+                        cfg or {}, "邮箱预检已跳过收尾",
+                        f"连续 {empty_rounds} 次取回 0 且剩余 {pending_n} 条，记未知后继续后面检测",
+                    )
             got = _ds(http.post(
                 f"{base}/api/email/geeksend/collect",
                 json={"finalize": finalize},
@@ -451,7 +489,7 @@ def run_api_precheck(http: requests.Session, base: str) -> dict:
         return s
 
 
-def start_smtp_send(http: requests.Session, base: str) -> bool:
+def start_smtp_send(http: requests.Session, base: str, cfg: dict | None = None) -> bool:
     """启动发信，不等待。已在跑则视为已启动。"""
     cur = email_progress(http, base, "smtp")
     if cur.get("running"):
@@ -465,10 +503,11 @@ def start_smtp_send(http: requests.Session, base: str) -> bool:
     if not started.get("success"):
         msg = started.get("message") or ""
         if "没有需要发信" in msg or "没有格式有效" in msg:
-            log("跳过发信检测:", msg)
+            from send_feishu import alert_skip
+            alert_skip(cfg or {}, "发信检测已跳过", msg)
             return False
         raise PipelineError(msg or "发信检测启动失败")
-    log("发信检测已启动", "共", started.get("total"), "（与 iMessage 等并行）")
+    log("发信检测已启动", "共", started.get("total"), "（与即时消息等并行）")
     return True
 
 
@@ -495,6 +534,8 @@ def finish_smtp_send(http: requests.Session, base: str) -> dict | None:
 
 def wait_engine(http: requests.Session, base: str, progress_path: str, label: str,
                 drain_pending: bool = False) -> dict:
+    from stall import StallWatch
+    watch = StallWatch("detect", label)
     last = ""
     smtp_last = ""
     seen_run = False
@@ -508,6 +549,7 @@ def wait_engine(http: requests.Session, base: str, progress_path: str, label: st
         msg = (f"{s.get('progress') or s.get('phase') or ''} "
                f"{s.get('current', 0)}/{s.get('total', 0)} "
                f"待取回{pending} {s.get('log') or ''}")
+        watch.tick((running, s.get("current"), s.get("total"), pending, s.get("done")))
         if msg != last:
             log(label, msg)
             last = msg
@@ -529,9 +571,9 @@ def wait_engine(http: requests.Session, base: str, progress_path: str, label: st
 def wait_key_idle(http: requests.Session, base: str) -> None:
     """共用 CheckNumber 密钥：三项都不再跑、也没有已扣费未取回，才允许开下一项。"""
     paths = (
-        ("/api/imessage/progress", "iMessage"),
-        ("/api/whatsapp/progress", "WhatsApp"),
-        ("/api/apple-email/progress", "Apple ID"),
+        ("/api/imessage/progress", "即时消息"),
+        ("/api/whatsapp/progress", "会话号码"),
+        ("/api/apple-email/progress", "账号邮箱"),
     )
     last = ""
     t0 = time.time()
@@ -545,8 +587,7 @@ def wait_key_idle(http: requests.Session, base: str) -> None:
         if not busy:
             return
         if time.time() - t0 > 3 * 3600:
-            log("共用密钥等待超时，仍占用:", "；".join(busy))
-            return
+            raise PipelineError("共用密钥等待超过 3 小时仍占用：" + "；".join(busy) + "。已停在该步，不往后跑")
         msg = "；".join(busy)
         if msg != last:
             log("共用密钥占用，等当前项取回并更新后再继续:", msg)
@@ -556,16 +597,23 @@ def wait_key_idle(http: requests.Session, base: str) -> None:
 
 def drain_checknumber(http: requests.Session, base: str, progress_path: str,
                       collect_path: str, label: str) -> dict:
+    from stall import StallWatch
     s = wait_engine(http, base, progress_path, label, drain_pending=True)
+    watch = StallWatch("detect", label + "未取回")
     tries = 0
-    while int(s.get("pending_items") or 0) > 0 and tries < 30:
-        log(label, "检测进程已停，还有", s.get("pending_items"), "条已扣费未取回，先取回再开下一项")
+    while int(s.get("pending_items") or 0) > 0:
+        pending = int(s.get("pending_items") or 0)
+        watch.tick(("pending", pending))
+        log(label, "检测进程已停，还有", pending, "条已扣费未取回，先取回再开下一项")
         got = _ds(http.post(f"{base}{collect_path}", json={}, timeout=60))
         log(label, got.get("message") or "已请求取回")
         s = wait_engine(http, base, progress_path, label + " 取回", drain_pending=True)
         tries += 1
-    if int(s.get("pending_items") or 0) > 0:
-        log(label, "仍有未取回", s.get("pending_items"), "条，下一项暂不启动")
+        if tries >= 30 and int(s.get("pending_items") or 0) > 0:
+            raise PipelineError(
+                f"{label}已扣费未取回 {s.get('pending_items')} 条，取回 {tries} 次仍未清完。"
+                "已停在该步，不往后跑"
+            )
     return s
 
 
@@ -604,7 +652,8 @@ def _dest_day_stamp(dest: Path) -> str:
         return datetime.now().strftime("%Y%m%d")
 
 
-def export_summary_zips(http: requests.Session, base: str, dest: Path) -> list[Path]:
+def export_summary_zips(http: requests.Session, base: str, dest: Path,
+                        cfg: dict | None = None) -> list[Path]:
     """核验页「直接下载 ZIP」：精简口径，A=表名不含「店」，B=表名含「店」。"""
     dest.mkdir(parents=True, exist_ok=True)
     day = _dest_day_stamp(dest)
@@ -628,7 +677,8 @@ def export_summary_zips(http: requests.Session, base: str, dest: Path) -> list[P
             except Exception:
                 err = r.text[:200]
             if err and "没有符合表名规则" in str(err):
-                log("没有", name, "跳过：", err)
+                from send_feishu import alert_skip
+                alert_skip(cfg or {}, "汇总导出已跳过", f"{name}：{err}")
                 continue
             raise PipelineError(err or f"汇总导出失败 HTTP {r.status_code}")
         fname = _zip_download_name(r, name)
@@ -687,34 +737,31 @@ def run_detect(cfg: dict, zip_path: Path | None = None, tri_item: dict | None = 
         wait_found_gate(cfg, dest)
     refresh_found_zip(dest)
 
-    packs: list[Path] = []
-    if zip_path:
-        packs.append(zip_path)
-    found = found_data_zip(dest)
-    if found:
-        log("核验一并导入查出 ZIP", found.name)
-        packs.append(found)
-    elif zip_path:
-        log("当天没有查出 ZIP，核验只导三源合并")
-    if not packs:
-        log("当天没有三源也没有查出 ZIP，跳过核验和飞书")
+    packs = day_folder_detect_zips(dest)
+    if packs:
+        log("核验导入当天目录 ZIP", " + ".join(p.name for p in packs))
+    else:
+        from send_feishu import alert_skip
+        alert_skip(cfg, "核验已跳过", "当天目录没有可导入的 ZIP")
         return None
 
     wait_detect(dhttp, detect_base, cfg.get("detect_exe") or "")
     import_zips(dhttp, detect_base, packs, cfg=cfg)
-    run_api_precheck(dhttp, detect_base)
-    start_smtp_send(dhttp, detect_base)
+    run_api_precheck(dhttp, detect_base, cfg)
+    start_smtp_send(dhttp, detect_base, cfg)
+    from funds import wait_checknumber
+    wait_checknumber(cfg, dhttp, detect_base)
     start_split_wait(dhttp, detect_base, "/api/imessage/start-split",
-                     "/api/imessage/progress", "iMessage 检测",
+                     "/api/imessage/progress", "即时消息检测",
                      collect_path="/api/imessage/collect")
     start_split_wait(dhttp, detect_base, "/api/whatsapp/start-split",
-                     "/api/whatsapp/progress", "WhatsApp 检测",
+                     "/api/whatsapp/progress", "会话号码检测",
                      collect_path="/api/whatsapp/collect")
     start_split_wait(dhttp, detect_base, "/api/apple-email/start-split",
-                     "/api/apple-email/progress", "Apple ID 检测",
+                     "/api/apple-email/progress", "账号邮箱检测",
                      collect_path="/api/apple-email/collect")
     finish_smtp_send(dhttp, detect_base)
-    outs = export_summary_zips(dhttp, detect_base, dest)
+    outs = export_summary_zips(dhttp, detect_base, dest, cfg=cfg)
     from run_pipeline import cfg_bool
     from send_feishu import notify_shop_zips, notify_summary_a_zip
     if cfg_bool(cfg, "feishu_push_after_detect", True):
@@ -743,7 +790,7 @@ def main():
             dhttp = _session()
             wait_detect(dhttp, detect_base, cfg.get("detect_exe") or "")
             dest = match_day_dir(cfg)
-            outs = export_summary_zips(dhttp, detect_base, dest)
+            outs = export_summary_zips(dhttp, detect_base, dest, cfg=cfg)
             from run_pipeline import cfg_bool
             from send_feishu import notify_shop_zips, notify_summary_a_zip
             if cfg_bool(cfg, "feishu_push_after_detect", True):

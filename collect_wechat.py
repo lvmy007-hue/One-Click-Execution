@@ -208,33 +208,66 @@ def is_found_table(path: Path) -> bool:
     return path.suffix.lower() in EXCEL_EXT and is_found_name(path.name)
 
 
-def gather_found_xlsx(dest: Path) -> list[Path]:
-    """查出表进「收表汇总」。根目录残留的也迁进去。"""
-    folder = found_tables_dir(dest)
-    for p in list(dest.glob("*.xlsx")):
-        if not is_found_name(p.name):
+def _iter_collect_found_copies(dest: Path) -> list[tuple[datetime, str]]:
+    """收集程序写入该日匹配目录的查出（微信/待收集）。手放到目录的不在这里。"""
+    folder = dest.name
+    marker = " → " + folder
+    out: list[tuple[datetime, str]] = []
+    if not LOG_FILE.is_file():
+        return out
+    try:
+        lines = LOG_FILE.read_text(encoding="utf-8").splitlines()[-8000:]
+    except OSError:
+        return out
+    for line in lines:
+        if " 查出 " not in line or marker not in line:
             continue
-        target = folder / p.name
-        if target.exists():
-            if target.stat().st_size == p.stat().st_size:
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
-                continue
-            target = unique_dest_path(folder, p.name)
+        if "查出 ZIP" in line or "已有 " in line or "DRY " in line or "将复制" in line:
+            continue
         try:
-            p.replace(target)
-        except OSError:
-            shutil.copy2(p, target)
-            try:
-                p.unlink()
-            except OSError:
-                pass
-    return sorted(p for p in folder.glob("*.xlsx") if is_found_name(p.name))
+            ts = datetime.strptime(line[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        rest = line.split(" 查出 ", 1)[1]
+        rest = rest.rsplit(marker, 1)[0].strip()
+        fname = rest.split(" → ")[-1].strip() if rest else ""
+        if fname:
+            out.append((ts, fname))
+    return out
+
+
+def found_auto_copied_before_noon(dest: Path, noon_hour: int = 12) -> bool:
+    """12 点前提前核验只认收集程序从微信/待收集收下的查出。
+    手放到匹配目录或「收表汇总」的不算，等到查出截止再核验。"""
+    try:
+        month, day_n = dest.name.split(".")
+        day_dt = datetime(datetime.now().year, int(month), int(day_n)).date()
+    except (ValueError, TypeError):
+        return False
+    noon = datetime(day_dt.year, day_dt.month, day_dt.day, int(noon_hour), 0, 0)
+    for ts, _name in _iter_collect_found_copies(dest):
+        if ts.date() == day_dt and ts < noon:
+            return True
+    return False
+
+
+def gather_found_xlsx(dest: Path) -> list[Path]:
+    """「收表汇总」里的表：微信收下的，以及手放到这一层的。当天根目录的文件不卷进来。"""
+    folder = found_tables_dir(dest)
+    if not folder.is_dir():
+        return []
+    out: list[Path] = []
+    for p in folder.iterdir():
+        if not p.is_file() or p.name.startswith("."):
+            continue
+        if p.suffix.lower() == ".zip":
+            continue
+        out.append(p)
+    return sorted(out, key=lambda x: x.name.lower())
 
 
 def rebuild_found_zip(dest: Path, dt: datetime) -> Path | None:
+    """收表汇总 → 数据.zip。根目录已有的压缩包不再打进去。"""
     files = gather_found_xlsx(dest)
     zpath = found_zip_path(dest, dt)
     if not files:
@@ -496,6 +529,8 @@ def watch(cfg: dict, extra: list[Path], daemon: bool):
     fh, fm = found_cutoff_hm(cfg)
     last_batch = collect_day(cfg)
     last_found = found_collect_day(cfg)
+    last_copy_err = ""
+    last_copy_t = 0.0
     dest = dest_dir(cfg, last_batch)
     log("无人值守监听已启动")
     log(f"每天 {fmt_hm(h, m)} 截止，当前归档: {dest}")
@@ -550,6 +585,16 @@ def watch(cfg: dict, extra: list[Path], daemon: bool):
                         log(msg)
             except Exception as e:
                 log("本轮收集出错，继续监听:", e)
+                msg = str(e)
+                now_ts = time.time()
+                if msg != last_copy_err or now_ts - last_copy_t > 30 * 60:
+                    last_copy_err = msg
+                    last_copy_t = now_ts
+                    try:
+                        from send_feishu import alert_skip
+                        alert_skip(cfg, "收集本轮已跳过", msg, extra="继续听下一轮。")
+                    except Exception:
+                        pass
             time.sleep(poll)
     except KeyboardInterrupt:
         log("已停止监听")

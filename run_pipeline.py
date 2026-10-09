@@ -54,6 +54,11 @@ class PipelineError(RuntimeError):
     pass
 
 
+class FundsError(PipelineError):
+    """轻松邮不够下详细地址：当天匹配整条停，不 60 秒重试。"""
+    pass
+
+
 def set_console_title(title: str = "一键执行") -> None:
     if os.name != "nt":
         return
@@ -362,6 +367,11 @@ def start_enhance(http: requests.Session, base: str, files: list[Path], matching
             "order_label": f"一键-{datetime.now().strftime('%m.%d')}",
             **cmap,
         }
+        from funds import wait_easymail
+        rows = int(prev.get("total_rows") or 0)
+        if wait_easymail(cfg or {}, http, base, rows):
+            log("充值后重新预览店表")
+            continue
         started = _json(http.post(f"{base}/address-enhance/batch-execute", data=fd, timeout=60))
         tid = started.get("task_id")
         if not tid:
@@ -373,12 +383,15 @@ def start_enhance(http: requests.Session, base: str, files: list[Path], matching
 
 def wait_enhance(http: requests.Session, base: str, task_id: str) -> dict:
     log("等待详细地址匹配完成（轻松邮通常要十几到几十分钟）")
+    from stall import StallWatch
+    watch = StallWatch("enhance", "详细地址匹配")
     last = ""
     while True:
         data = _json(http.get(f"{base}/address-enhance/task-status/{task_id}", timeout=30))
         t = data.get("task") or {}
         state = t.get("state") or ""
         msg = f"{state} {t.get('processed', 0)}/{t.get('total', 0)} 成功{t.get('success', 0)} 失败{t.get('failed', 0)}"
+        watch.tick((state, t.get("processed"), t.get("success"), t.get("failed")))
         if msg != last:
             log("详细地址", msg)
             last = msg
@@ -536,6 +549,8 @@ def start_em_info(http: requests.Session, base: str, enhance_db_id, cfg: dict | 
     轻松邮 EXE 下单名由匹配系统自己缩短，和页面名不冲突。"""
     eid = _as_enhance_id(enhance_db_id)
     log("联系方式匹配：导入详细地址全量", eid)
+    from funds import wait_easymail_contact
+    wait_easymail_contact(cfg or {}, http, base)
     try:
         started = _json(http.post(
             f"{base}/em-info/submit",
@@ -544,7 +559,8 @@ def start_em_info(http: requests.Session, base: str, enhance_db_id, cfg: dict | 
         ))
     except PipelineError as e:
         if "没有可提交的行" in str(e):
-            log("联系方式没有可提交行，跳过")
+            from send_feishu import alert_skip
+            alert_skip(cfg or {}, "联系方式已跳过", "没有可提交的行，继续邮箱匹配")
             return None
         raise
     tid = started.get("task_id")
@@ -598,6 +614,8 @@ def push_latest_after_contact(cfg: dict, http: requests.Session, base: str,
 
 def wait_em_info(http: requests.Session, base: str, task_id: int) -> dict:
     log("等待联系方式匹配完成")
+    from stall import StallWatch
+    watch = StallWatch("contact", "联系方式匹配")
     last = ""
     while True:
         data = _json(http.get(f"{base}/em-info/task/{task_id}", timeout=30))
@@ -605,6 +623,7 @@ def wait_em_info(http: requests.Session, base: str, task_id: int) -> dict:
         st = (t.get("status") or "").lower()
         msg = (f"{st} {t.get('message') or t.get('status_label') or ''} "
                f"电话{t.get('phone') or 0} 邮箱{t.get('email') or 0}")
+        watch.tick((st, t.get("phone"), t.get("email"), t.get("message")))
         if msg != last:
             log("联系方式", msg)
             last = msg
@@ -635,23 +654,31 @@ def today_em_info(http: requests.Session, base: str, enhance_db_id="") -> tuple[
 
 def start_email(http: requests.Session, base: str, enhance_db_id, cfg: dict | None = None) -> int | None:
     log("邮箱匹配：导入详细地址全量（有街道）")
-    try:
-        pack = _json(http.post(
-            f"{base}/lookup/enhance-leftover-upload",
-            json={"task_id": enhance_db_id},
-            timeout=120,
-        ))
-    except PipelineError as e:
-        text = str(e)
-        if "没有剩余" in text or "没有带街道" in text:
-            log("没有带街道的行，跳过邮箱匹配")
-            return None
-        raise
-    cols = pack.get("columns") or []
-    cmap = guess_email_map(cols)
-    if not cmap["name_col"] or not cmap["state_col"] or not cmap["addr_col"] or not cmap["store_col"]:
-        raise PipelineError("邮箱列映射失败: " + str(cols))
-    files = pack.get("files") or []
+    from funds import wait_sd
+    while True:
+        try:
+            pack = _json(http.post(
+                f"{base}/lookup/enhance-leftover-upload",
+                json={"task_id": enhance_db_id},
+                timeout=120,
+            ))
+        except PipelineError as e:
+            text = str(e)
+            if "没有剩余" in text or "没有带街道" in text:
+                from send_feishu import alert_skip
+                alert_skip(cfg or {}, "邮箱匹配已跳过", text or "没有带街道的行")
+                return None
+            raise
+        cols = pack.get("columns") or []
+        cmap = guess_email_map(cols)
+        if not cmap["name_col"] or not cmap["state_col"] or not cmap["addr_col"] or not cmap["store_col"]:
+            raise PipelineError("邮箱列映射失败: " + str(cols))
+        files = pack.get("files") or []
+        rows = int(pack.get("total_rows") or 0)
+        if wait_sd(cfg or {}, http, base, rows):
+            log("充值后重新打包邮箱表")
+            continue
+        break
     conc = str((cfg or {}).get("email_sd_concurrency") or "50")
     log(f"全量 {pack.get('total_rows')} 行，{len(files)} 个店表，SD并发 {conc}")
     fd = {
@@ -676,12 +703,15 @@ def start_email(http: requests.Session, base: str, enhance_db_id, cfg: dict | No
 
 def wait_lookup(http: requests.Session, base: str, task_id: int) -> dict:
     log("等待邮箱匹配完成")
+    from stall import StallWatch
+    watch = StallWatch("email", "邮箱匹配")
     last = ""
     while True:
         data = _json(http.get(f"{base}/lookup/batch-status/{task_id}", timeout=30))
         st = data.get("status") or ""
         msg = (f"{st} {data.get('processed_rows', 0)}/{data.get('total_rows', 0)} "
                f"成功{data.get('success_rows', 0)} 失败{data.get('failed_rows', 0)}")
+        watch.tick((st, data.get("processed_rows"), data.get("success_rows"), data.get("failed_rows")))
         if msg != last:
             log("邮箱匹配", msg)
             last = msg
@@ -703,12 +733,23 @@ def _write_tf_stamp(task_id: str) -> None:
         pass
 
 
-def start_tracerfy(http: requests.Session, base: str, email_task_id: int) -> str | None:
-    existing = today_tracerfy_task(http, base)
-    if existing:
-        tid, st = existing
-        log("今日 Tracerfy 已有任务，不再重交", tid, st)
-        return tid
+def _clear_tf_stamp() -> None:
+    try:
+        _tf_stamp_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def start_tracerfy(http: requests.Session, base: str, email_task_id: int,
+                   cfg: dict | None = None, force: bool = False) -> str | None:
+    if force:
+        _clear_tf_stamp()
+    else:
+        existing = today_tracerfy_task(http, base)
+        if existing:
+            tid, st = existing
+            log("今日 Tracerfy 已有任务，不再重交", tid, st)
+            return tid
     log("Tracerfy：上传邮箱剩余付费")
     try:
         leftover = _json(http.post(
@@ -718,13 +759,29 @@ def start_tracerfy(http: requests.Session, base: str, email_task_id: int) -> str
         ))
     except PipelineError as e:
         if "没有剩余" in str(e):
-            log("没有付费剩余，跳过 Tracerfy")
+            from send_feishu import alert_skip
+            alert_skip(cfg or {}, "剩余补全已跳过", "没有付费剩余")
             return None
         raise
     files = leftover.get("files") or []
     if not files:
-        log("没有付费剩余，跳过 Tracerfy")
+        from send_feishu import alert_skip
+        alert_skip(cfg or {}, "剩余补全已跳过", "没有付费剩余")
         return None
+    from funds import wait_tracerfy as wait_tf_funds
+    rows = sum(int(f.get("rows") or 0) for f in files)
+    if wait_tf_funds(cfg or {}, http, base, rows):
+        log("充值后重新打包 Tracerfy 表")
+        leftover = _json(http.post(
+            f"{base}/tracerfy/leftover-upload",
+            json={"task_id": email_task_id},
+            timeout=120,
+        ))
+        files = leftover.get("files") or []
+        if not files:
+            from send_feishu import alert_skip
+            alert_skip(cfg or {}, "剩余补全已跳过", "充值后重新打包仍没有付费剩余")
+            return None
     specs = []
     for f in files:
         cmap = guess_tf_map(f.get("columns") or [])
@@ -754,11 +811,14 @@ def start_tracerfy(http: requests.Session, base: str, email_task_id: int) -> str
             if not bad:
                 raise
             for s in bad:
-                log("Tracerfy 跳过无有效行", s["filename"])
+                log("剩余补全跳过无有效行", s["filename"])
+                from send_feishu import alert_skip
+                alert_skip(cfg or {}, "剩余补全已跳过", f"{s['filename']} 无有效数据行")
             skip = {s["filename"] for s in bad}
             specs = [s for s in specs if s["filename"] not in skip]
     if not started:
-        log("Tracerfy 剩余表都无有效行，跳过")
+        from send_feishu import alert_skip
+        alert_skip(cfg or {}, "剩余补全已跳过", "剩余表都无有效行")
         return None
     tid = started.get("task_id")
     log(f"Tracerfy 已提交 {tid}  行数{started.get('rows')}  预计{started.get('estimated_wait')}秒")
@@ -768,7 +828,9 @@ def start_tracerfy(http: requests.Session, base: str, email_task_id: int) -> str
 
 
 def wait_tracerfy(http: requests.Session, base: str, task_id: str) -> dict:
-    log("等待 Tracerfy 完成")
+    log("等待剩余补全完成")
+    from stall import StallWatch
+    watch = StallWatch("tracerfy", "剩余补全")
     last = ""
     while True:
         try:
@@ -782,17 +844,19 @@ def wait_tracerfy(http: requests.Session, base: str, task_id: str) -> dict:
                     t = item
                     break
             if not t:
+                watch.tick(("missing",))
                 time.sleep(15)
                 continue
         st = t.get("status") or t.get("state") or ""
         msg = f"{st} hit={t.get('hit_rows', 0)} submitted={t.get('rows_submitted', 0)}"
+        watch.tick((st, t.get("hit_rows"), t.get("rows_submitted")))
         if msg != last:
-            log("Tracerfy", msg)
+            log("剩余补全", msg)
             last = msg
         if st in ("done", "completed"):
             return t
         if st in ("failed", "error", "timeout", "cancelled"):
-            raise PipelineError(f"Tracerfy 结束: {st}")
+            raise PipelineError(f"剩余补全结束: {st}")
         time.sleep(15)
 
 
@@ -914,7 +978,8 @@ def run(cfg: dict, all_today: bool) -> None:
     try:
         push_enhance_zip(cfg, http, base, enhance_tid, db_id)
     except Exception as e:
-        log("详细地址飞书推送跳过:", e)
+        from send_feishu import alert_skip
+        alert_skip(cfg, "详细地址推送已跳过", str(e), extra="本地 ZIP 已保存，链路继续。")
     run_after_enhance(cfg, http, base, db_id)
 
 
@@ -1041,22 +1106,27 @@ def today_done_email_id(http: requests.Session, base: str) -> int | None:
     return None
 
 
+def _tri_and_detect(cfg: dict, http: requests.Session, base: str,
+                    force_tri: bool = False, now: bool = False) -> None:
+    from run_detect import match_day_dir, run_detect
+    dest = match_day_dir(cfg)
+    existing = None if force_tri else skip_tri_if_done(dest, cfg)
+    if existing:
+        run_detect(cfg, zip_path=existing, skip_found_wait=now)
+    else:
+        item = tri_merge_today(http, base, dest)
+        run_detect(cfg, tri_item=item, skip_found_wait=now)
+
+
 def run_from_email(cfg: dict, http: requests.Session, base: str, db_id, restart_email: bool = True) -> None:
     log("从邮箱匹配续跑，详细地址任务", db_id, "并发", cfg.get("email_sd_concurrency") or 50)
     _run_email_and_after(cfg, http, base, db_id, restart_email=restart_email)
-    from run_detect import match_day_dir, run_detect
-    dest = match_day_dir(cfg)
-    existing = skip_tri_if_done(dest, cfg)
-    if existing:
-        run_detect(cfg, zip_path=existing)
-    else:
-        item = tri_merge_today(http, base, dest)
-        run_detect(cfg, tri_item=item)
+    _tri_and_detect(cfg, http, base)
     log("整条链路完成")
 
 
 def _run_email_and_after(cfg: dict, http: requests.Session, base: str, db_id,
-                         restart_email: bool = False) -> int | None:
+                         restart_email: bool = False, restart_tf: bool = False) -> int | None:
     running = running_email_task_id(http, base)
     email_id = None
     if running and not restart_email:
@@ -1079,7 +1149,7 @@ def _run_email_and_after(cfg: dict, http: requests.Session, base: str, db_id,
         if email_id:
             wait_lookup(http, base, email_id)
     if email_id:
-        existing = today_tracerfy_task(http, base)
+        existing = None if restart_tf else today_tracerfy_task(http, base)
         if existing:
             tf_id, st = existing
             if st in _TF_DONE:
@@ -1088,7 +1158,7 @@ def _run_email_and_after(cfg: dict, http: requests.Session, base: str, db_id,
                 log("今日 Tracerfy 已提交，接着等", tf_id, st)
                 wait_tracerfy(http, base, tf_id)
         else:
-            tf_id = start_tracerfy(http, base, email_id)
+            tf_id = start_tracerfy(http, base, email_id, cfg, force=restart_tf)
             if tf_id:
                 wait_tracerfy(http, base, tf_id)
     return email_id
@@ -1114,17 +1184,81 @@ def run_after_enhance(cfg: dict, http: requests.Session, base: str, db_id) -> No
         try:
             push_latest_after_contact(cfg, http, base, contact_id, db_id)
         except Exception as e:
-            log("联系方式完成后覆盖导出跳过:", e)
+            from send_feishu import alert_skip
+            alert_skip(cfg, "联系方式覆盖导出已跳过", str(e), extra="链路继续邮箱匹配。")
     _run_email_and_after(cfg, http, base, db_id, restart_email=False)
-    from run_detect import match_day_dir, run_detect
-    dest = match_day_dir(cfg)
-    existing = skip_tri_if_done(dest, cfg)
-    if existing:
-        run_detect(cfg, zip_path=existing)
-    else:
-        item = tri_merge_today(http, base, dest)
-        run_detect(cfg, tri_item=item)
+    _tri_and_detect(cfg, http, base)
     log("整条链路完成")
+
+
+def run_from_step(cfg: dict, step: str, now: bool = True) -> None:
+    """从指定工序重跑本步及之后。"""
+    from funds import RERUN_STEPS
+    key = str(step or "").strip().lower()
+    names = dict(RERUN_STEPS)
+    if key not in names:
+        raise PipelineError("未知起点：" + (step or ""))
+    log("从工序重跑:", names[key])
+    base = (cfg.get("matching_url") or "http://127.0.0.1:5000").rstrip("/")
+    http = _session()
+    if key == "detect":
+        from run_detect import run_detect
+        run_detect(cfg, skip_found_wait=now)
+        log("整条链路完成")
+        return
+    wait_app(http, base, cfg.get("matching_exe") or "")
+    if key == "enhance":
+        run(cfg, all_today=True)
+        return
+    if key == "tri":
+        from run_detect import match_day_dir, run_detect
+        dest = match_day_dir(cfg)
+        item = tri_merge_today(http, base, dest)
+        run_detect(cfg, tri_item=item, skip_found_wait=now)
+        log("整条链路完成")
+        return
+    db_id = latest_enhance_db_id(http, base)
+    if key == "contact":
+        live, done = today_em_info(http, base, db_id)
+        contact_id = None
+        if live:
+            contact_id = int(live.get("id") or live.get("task_id"))
+            log("联系方式仍在跑，接着等", contact_id)
+            wait_em_info(http, base, contact_id)
+        else:
+            contact_id = start_em_info(http, base, db_id, cfg)
+            if contact_id:
+                wait_em_info(http, base, contact_id)
+        if contact_id:
+            try:
+                push_latest_after_contact(cfg, http, base, contact_id, db_id)
+            except Exception as e:
+                from send_feishu import alert_skip
+                alert_skip(cfg, "联系方式覆盖导出已跳过", str(e), extra="链路继续邮箱匹配。")
+        _run_email_and_after(cfg, http, base, db_id, restart_email=True, restart_tf=True)
+        _tri_and_detect(cfg, http, base, force_tri=True, now=now)
+        log("整条链路完成")
+        return
+    if key == "email":
+        _run_email_and_after(cfg, http, base, db_id, restart_email=True, restart_tf=True)
+        _tri_and_detect(cfg, http, base, force_tri=True, now=now)
+        log("整条链路完成")
+        return
+    if key == "tracerfy":
+        email_id = today_done_email_id(http, base)
+        running = running_email_task_id(http, base)
+        if running:
+            wait_lookup(http, base, running)
+            email_id = running
+        if not email_id:
+            raise PipelineError("没有今日邮箱匹配，无法从 Tracerfy 重跑")
+        tf_id = start_tracerfy(http, base, email_id, cfg, force=True)
+        if tf_id:
+            wait_tracerfy(http, base, tf_id)
+        _tri_and_detect(cfg, http, base, force_tri=True, now=now)
+        log("整条链路完成")
+        return
+    raise PipelineError("未知起点：" + key)
 
 
 def today_enhance_tasks(http: requests.Session, base: str) -> tuple[dict | None, dict | None]:
@@ -1213,7 +1347,8 @@ def run_daily_once(cfg: dict) -> None:
         try:
             push_enhance_zip(cfg, http, base, tid, db_id)
         except Exception as e:
-            log("详细地址飞书推送跳过:", e)
+            from send_feishu import alert_skip
+            alert_skip(cfg, "详细地址推送已跳过", str(e), extra="本地 ZIP 已保存，链路继续。")
         run_after_enhance(cfg, http, base, db_id)
         return
 
@@ -1239,7 +1374,8 @@ def run_daily_once(cfg: dict) -> None:
         return
 
     if not files:
-        log("当天没有店表，跳过匹配；核验只认当天三源或当天查出")
+        from send_feishu import alert_skip
+        alert_skip(cfg, "匹配已跳过", "当天没有店表，核验只认当天三源或当天查出")
         from run_detect import run_detect
         run_detect(cfg)
         return
@@ -1256,6 +1392,20 @@ def run_daily(cfg: dict) -> None:
     write_pid(PIPELINE_PID)
     crashes = 0
     try:
+        marker = HERE / "rerun-from.txt"
+        step = ""
+        if marker.is_file():
+            try:
+                step = marker.read_text(encoding="utf-8").strip()
+            except OSError:
+                step = ""
+            try:
+                marker.unlink()
+            except OSError:
+                pass
+        if step:
+            run_from_step(cfg, step, now=True)
+            return
         while True:
             try:
                 run_daily_once(cfg)
@@ -1284,6 +1434,7 @@ def main():
     ap.add_argument("--config", default=str(DEFAULT_CFG))
     ap.add_argument("--all", action="store_true", help="当天目录全部店表（含已跑过的）")
     ap.add_argument("--from-email", action="store_true", help="跳过详细地址和联系方式，从今日邮箱匹配重跑（命中走缓存）")
+    ap.add_argument("--from-step", default="", help="从指定工序重跑后面整条：enhance/contact/email/tracerfy/tri/detect")
     ap.add_argument("--push-enhance", action="store_true", help="只下载今日详细地址 ZIP 并推飞书")
     ap.add_argument("--daily", action="store_true",
                     help="无人值守日跑：按进度续跑，中断后自动接着跑")
@@ -1295,7 +1446,11 @@ def main():
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     os.chdir(HERE)
     try:
-        if args.daily:
+        if args.from_step and not args.daily:
+            run_from_step(cfg, args.from_step, now=True)
+        elif args.daily:
+            if args.from_step:
+                (HERE / "rerun-from.txt").write_text(args.from_step.strip(), encoding="utf-8")
             run_daily(cfg)
         elif args.push_enhance:
             base = (cfg.get("matching_url") or "http://127.0.0.1:5000").rstrip("/")
@@ -1311,6 +1466,9 @@ def main():
             run_from_email(cfg, http, base, db_id)
         else:
             run(cfg, all_today=args.all)
+    except FundsError as e:
+        log("今日匹配因欠费停止:", e)
+        sys.exit(1)
     except PipelineError as e:
         log("失败:", e)
         try:

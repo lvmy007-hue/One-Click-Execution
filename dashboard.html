@@ -22,7 +22,22 @@
   }
   #top .sys { font-size: 15px; font-weight: 600; }
   #top .sys small { font-weight: 400; margin-left: 10px; color: #c5d4e3; }
-  #top .right { color: #d7e3ee; font-variant-numeric: tabular-nums; }
+  #top .right {
+    color: #d7e3ee;
+    font-variant-numeric: tabular-nums;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  #top .btn {
+    border: 1px solid #9bb4c9;
+    background: transparent;
+    color: #fff;
+    padding: 4px 10px;
+    font: 13px inherit;
+    cursor: pointer;
+  }
+  #top .btn:hover { background: rgba(255,255,255,.12); }
   #bar {
     background: #fff;
     border-bottom: 1px solid #d9dde3;
@@ -173,7 +188,7 @@
   .hide { display: none !important; }
   .form-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
   .form-row label { display: block; color: #6b7380; font-size: 12px; margin-bottom: 4px; }
-  .form-row input[type=text] {
+  .form-row input[type=text], .form-row select, .form-row input[type=date] {
     border: 1px solid #d9dde3;
     padding: 6px 8px;
     font: 13px/1.4 inherit;
@@ -190,26 +205,119 @@
   }
   .btn.ghost { background: #fff; color: #0f3d66; }
   .btn:disabled { opacity: .5; cursor: default; }
-  #set-msg, #pipe-msg { margin-left: 10px; color: #2b7a4b; }
-  #set-msg.err, #pipe-msg.err { color: #b42318; }
-  #shop-tb input[type=text] { min-width: 120px; width: 100%; box-sizing: border-box; }
+  #set-msg, #pipe-msg, #hist-msg { margin-left: 10px; color: #2b7a4b; }
+  #set-msg.err, #pipe-msg.err, #hist-msg.err, #rerun-msg.err { color: #b42318; }
   .form-row input[type=text].wide { min-width: 420px; width: min(720px, 92vw); }
   .form-row input[type=text].short { min-width: 96px; width: 110px; }
   .chk-row { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }
   .chk-row label { display: flex; align-items: flex-start; gap: 8px; color: #2a3038; font-size: 13px; cursor: pointer; }
   .chk-row input { margin-top: 3px; }
+  .funds {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .fund-box { border: 1px solid #e7eaee; padding: 8px 10px; }
+  .fund-box .n { color: #6b7380; font-size: 12px; }
+  .fund-box .v { margin-top: 2px; font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .fund-box .a { margin-top: 4px; font-size: 12px; color: #5c6570; }
+  .fund-box.low .v { color: #b42318; }
+  .fund-box.miss .v { color: #8a5b12; font-size: 13px; font-weight: 600; }
+  @media (max-width: 900px) { .funds { grid-template-columns: 1fr 1fr; } }
   .chk-row .hint { color: #6b7380; font-size: 12px; margin-left: 22px; }
   .sec-note { color: #6b7380; font-size: 12px; margin: 0 0 10px; }
-</style>
+  .shop-map {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 16px;
+    padding: 8px 12px 12px;
+    max-height: 220px;
+    overflow: auto;
+  }
+  .shop-item { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .shop-item .s-shop { width: 88px; min-width: 88px; flex: none; }
+  .shop-item .s-user { flex: 1; min-width: 0; }
+  .shop-item input[type=text] {
+    border: 1px solid #d9dde3;
+    padding: 4px 6px;
+    font: 13px/1.4 inherit;
+    box-sizing: border-box;
+  }
+  .shop-item .s-del { font-size: 12px; white-space: nowrap; }
+  @media (max-width: 900px) { .shop-map { grid-template-columns: 1fr; } }
+  .pipe-page { padding: 16px 20px 28px; }
+  .pipe-head {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 12px; margin-bottom: 14px;
+  }
+  .pipe-head h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  .pipe-head p { margin: 4px 0 0; color: #6b7380; font-size: 12px; }
+  .pipe-hero {
+    display: grid;
+    grid-template-columns: 1.45fr .55fr;
+    gap: 12px;
+    margin-bottom: 12px;
+    align-items: stretch;
+  }
+  .pipe-stack { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .pipe-stack .card.grow { flex: 1; display: flex; flex-direction: column; }
+  .pipe-stack .card.grow .bd { flex: 1; }
+  .pipe-grid {
+    display: grid;
+    grid-template-columns: 1.15fr .85fr;
+    gap: 12px;
+  }
+  .pipe-grid .span2 { grid-column: 1 / -1; }
+  .pipe-foot {
+    background: #fff;
+    border: 1px solid #d9dde3;
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .funds-kpi { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .funds-kpi .cell { border: 1px solid #e7eaee; padding: 10px 12px; background: #f7f8fa; }
+  .funds-kpi .k { color: #6b7380; font-size: 12px; }
+  .funds-kpi .n { margin-top: 2px; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .funds-kpi .n.low { color: #b42318; }
+  .st-ok { color: #2b7a4b; }
+  .st-low { color: #b42318; }
+  .st-miss { color: #8a5b12; }
+  .rerun-box { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .rerun-box label { margin: 0; color: #6b7380; font-size: 12px; white-space: nowrap; }
+  .pay-box { margin-top: 16px; padding-top: 14px; border-top: 1px solid #e7eaee; }
+  .pay-box .lab { color: #6b7380; font-size: 12px; margin-bottom: 8px; }
+  .pay-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .pay-btns a {
+    display: block;
+    text-align: center;
+    text-decoration: none;
+    border: 1px solid #d9dde3;
+    background: #fff;
+    color: #1f2329;
+    padding: 8px 10px 7px;
+    font: 13px inherit;
+  }
+  .pay-btns a:hover { border-color: #0f3d66; color: #0f3d66; }
+  .pay-btns a small { display: block; color: #6b7380; font-size: 11px; font-weight: 400; }
+  @media (max-width: 1100px) {
+    .pipe-hero, .pipe-grid { grid-template-columns: 1fr; }
+    .pipe-grid .span2 { grid-column: auto; }
+    .funds-kpi { grid-template-columns: 1fr 1fr; }
+  }</style>
 </head>
 <body>
 <div id="top">
-  <div class="sys">店表作业调度系统 <small>本机监视 · 飞书与链路可改</small></div>
-  <div class="right" id="clock">—</div>
+  <div class="sys">店表作业调度系统</div>
+  <div class="right">
+    <button class="btn" id="btn-restart-dash" type="button">重启看板</button>
+    <span id="clock">—</span>
+  </div>
 </div>
 <div id="nav">
   <a class="on" data-page="job">作业</a>
-  <a data-page="set">飞书设置</a>
+  <a data-page="set">推送设置</a>
   <a data-page="pipe">链路设置</a>
 </div>
 <div id="bar"></div>
@@ -287,8 +395,8 @@
         <thead>
           <tr>
             <th>引擎</th><th>状态</th><th>阶段</th><th>进度</th>
-            <th title="邮箱=有效；iMessage=iMessage；WhatsApp=有号；Apple=是 Apple ID">命中</th>
-            <th title="邮箱=无效；iMessage=仅短信；WhatsApp/Apple=否">否定</th>
+            <th title="邮箱=有效；即时消息=可连；会话=有号；账号=是">命中</th>
+            <th title="邮箱=无效；即时消息=仅短信；会话/账号=否">否定</th>
             <th>未判定</th><th>最近日志</th>
           </tr>
         </thead>
@@ -311,16 +419,16 @@
 </div>
 <div id="page-set" class="wrap hide">
   <div class="card" style="margin-bottom:12px">
-    <div class="hd">推送与告警 <span>表格仍走 ZIP 机器人；报错只走告警机器人私聊，不进群</span></div>
+    <div class="hd">推送与告警</div>
     <div class="bd">
       <div class="form-row">
         <div>
           <label>详细地址推送给</label>
-          <input id="set-enhance" type="text" placeholder="飞书姓名，如 17.">
+          <input id="set-enhance" type="text" placeholder="接收人姓名，如 17.">
         </div>
         <div>
           <label>汇总A发给</label>
-          <input id="set-summary-a" type="text" placeholder="飞书姓名，如 李飞">
+          <input id="set-summary-a" type="text" placeholder="接收人 ID">
         </div>
         <div>
           <label>表格抄送（逗号分隔）</label>
@@ -339,156 +447,225 @@
       </div>
     </div>
   </div>
+  <div class="card" style="margin-bottom:12px">
+    <div class="hd">历史推送</div>
+    <div class="bd">
+      <div class="form-row">
+        <div>
+          <label>日期（最近 7 天）</label>
+          <select id="hist-day"></select>
+        </div>
+        <div id="hist-pick-wrap" class="hide">
+          <label>自选日期</label>
+          <input id="hist-pick" type="date">
+        </div>
+        <div>
+          <label>推送方式</label>
+          <select id="hist-mode">
+            <option value="shops">按店对照（可勾选店）</option>
+            <option value="summary_a">汇总A整包发给指定人</option>
+            <option value="zip">所选 ZIP 整包发给指定人</option>
+          </select>
+        </div>
+        <div>
+          <label>接收人（整包 / 汇总A 时必填）</label>
+          <input id="hist-to" type="text" placeholder="接收人姓名">
+        </div>
+      </div>
+      <div class="form-row" id="hist-pack-row">
+        <label><input id="hist-pack-a" type="checkbox"> 汇总A</label>
+        <label><input id="hist-pack-b" type="checkbox"> 汇总B</label>
+      </div>
+      <div class="muted" id="hist-zips">先选日期</div>
+      <div class="scroll" style="max-height:220px;margin-top:8px">
+        <table>
+          <thead><tr><th style="width:36px"></th><th>店</th><th>对照</th><th>表</th></tr></thead>
+          <tbody id="hist-shops"></tbody>
+        </table>
+      </div>
+      <div style="margin-top:10px">
+        <button class="btn" id="btn-hist-push" type="button">补发</button>
+        <span id="hist-msg"></span>
+      </div>
+    </div>
+  </div>
   <div class="card">
-    <div class="hd">店名对照 <span>一店多人 / 一人多店均可；也可用逗号写在一格</span>
+    <div class="hd">店名对照
       <button class="btn ghost" id="btn-add" type="button">加一行</button>
     </div>
-    <div class="bd muted" style="padding-top:0">例：V店→李文佳、袁美丽；或 B店,C店→靳淼</div>
-    <div class="scroll" style="max-height:420px">
-      <table>
-        <thead><tr><th>店名（可逗号多店）</th><th>飞书姓名（可逗号多人）</th><th style="width:70px"></th></tr></thead>
-        <tbody id="shop-tb"></tbody>
-      </table>
-    </div>
+    <div id="shop-tb" class="shop-map"></div>
   </div>
 </div>
-<div id="page-pipe" class="wrap hide">
-  <div class="card" style="margin-bottom:12px">
-    <div class="hd">时间窗口 <span>收集截止、核验等到点；改后需重启日更才完全生效</span></div>
-    <div class="bd">
-      <div class="form-row">
-        <div>
-          <label>收集截止</label>
-          <input id="p-collect-cutoff" class="short" type="text" placeholder="09:30">
-        </div>
-        <div>
-          <label>核验开始</label>
-          <input id="p-found-cutoff" class="short" type="text" placeholder="17:40">
-        </div>
-        <div>
-          <label>查出午间点（时）</label>
-          <input id="p-noon" class="short" type="text" placeholder="12">
-        </div>
-        <div>
-          <label>查出规则起始日</label>
-          <input id="p-rule-start" class="short" type="text" placeholder="2026-10-01">
-        </div>
-        <div>
-          <label>收集轮询（秒）</label>
-          <input id="p-poll" class="short" type="text" placeholder="2">
-        </div>
-        <div>
-          <label>文件稳定（秒）</label>
-          <input id="p-stable" class="short" type="text" placeholder="1.2">
-        </div>
-      </div>
+<div id="page-pipe" class="pipe-page wrap hide">
+  <div class="pipe-head">
+    <div>
+      <h1>链路设置</h1>
     </div>
-  </div>
-  <div class="card" style="margin-bottom:12px">
-    <div class="hd">目录路径 <span>微信 / 待收集 / 原始与匹配落盘</span></div>
-    <div class="bd">
-      <div class="form-row">
-        <div>
-          <label>微信根目录</label>
-          <input id="p-wechat" class="wide" type="text">
-        </div>
-      </div>
-      <div class="form-row">
-        <div>
-          <label>待收集</label>
-          <input id="p-drop" class="wide" type="text">
-        </div>
-      </div>
-      <div class="form-row">
-        <div>
-          <label>原始数据</label>
-          <input id="p-dest" class="wide" type="text">
-        </div>
-      </div>
-      <div class="form-row">
-        <div>
-          <label>原始地址（详细地址归档）</label>
-          <input id="p-enhance" class="wide" type="text">
-        </div>
-      </div>
-      <div class="form-row">
-        <div>
-          <label>匹配数据</label>
-          <input id="p-match" class="wide" type="text">
-        </div>
-      </div>
-      <div class="form-row">
-        <div>
-          <label>店表必填列（逗号分隔）</label>
-          <input id="p-headers" class="wide" type="text" placeholder="店铺，买家全名，城市，州，邮编">
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="card" style="margin-bottom:12px">
-    <div class="hd">匹配与并发 <span>本机服务地址、EXE、邮箱并发</span></div>
-    <div class="bd">
-      <div class="form-row">
-        <div>
-          <label>匹配服务 URL</label>
-          <input id="p-match-url" type="text" placeholder="http://127.0.0.1:5000">
-        </div>
-        <div>
-          <label>核验服务 URL</label>
-          <input id="p-detect-url" type="text" placeholder="http://127.0.0.1:8848">
-        </div>
-      </div>
-      <div class="form-row">
-        <div>
-          <label>匹配 EXE</label>
-          <input id="p-match-exe" class="wide" type="text">
-        </div>
-      </div>
-      <div class="form-row">
-        <div>
-          <label>核验 EXE</label>
-          <input id="p-detect-exe" class="wide" type="text">
-        </div>
-      </div>
-      <div class="form-row">
-        <div>
-          <label>匹配模式</label>
-          <input id="p-mode" class="short" type="text" placeholder="2">
-        </div>
-        <div>
-          <label>邮箱并发</label>
-          <input id="p-conc" class="short" type="text" placeholder="50">
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="card" style="margin-bottom:12px">
-    <div class="hd">推送与跳过开关 <span>飞书推送下次发送生效；跳过合并影响日更</span></div>
-    <div class="bd">
-      <div class="chk-row">
-        <label><input id="p-push" type="checkbox"> 核验后推飞书</label>
-        <div class="hint">关则只落盘精简包，不推店表 / 汇总</div>
-        <label><input id="p-as-zip" type="checkbox"> 按人打成 ZIP 推送</label>
-        <div class="hint">关则每人逐张 xlsx 发送</div>
-        <label><input id="p-skip-tri" type="checkbox"> 已有成功包则跳过再合并</label>
-        <div class="hint">关则每次都会重新三源合并 / 下载</div>
-      </div>
-    </div>
-  </div>
-  <div class="card">
-    <div class="hd">保存 <span>写入 config.json；时间 / 路径 / 并发建议重启日更</span></div>
-    <div class="bd">
-      <p class="sec-note">Secret、open_id 不在本页改。飞书姓名对照请用「飞书设置」。</p>
-      <button class="btn" id="btn-pipe-save" type="button">保存链路设置</button>
+    <div>
+      <button class="btn" id="btn-pipe-save" type="button">保存设置</button>
       <button class="btn ghost" id="btn-pipe-restart" type="button">重启日更</button>
       <span id="pipe-msg"></span>
+    </div>
+  </div>
+  <div class="pipe-hero">
+    <div class="card">
+      <div class="hd">余额看板 <a href="#" id="btn-funds-refresh">刷新</a></div>
+      <div class="bd">
+        <div class="muted" id="funds-wait" style="margin-bottom:10px"></div>
+        <div class="funds-kpi" id="funds-kpi"></div>
+        <div id="funds-box">显示今日已查结果</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="hd">作业与推送</div>
+      <div class="bd">
+        <div class="rerun-box" style="margin-bottom:14px">
+          <label>从哪里开始</label>
+          <select id="rerun-from">
+            <option value="enhance">详细地址匹配</option>
+            <option value="contact">联系方式匹配</option>
+            <option value="email">邮箱匹配</option>
+            <option value="tracerfy">剩余补全</option>
+            <option value="tri">三源合并</option>
+            <option value="detect">核验</option>
+          </select>
+          <button class="btn" id="btn-rerun" type="button">从这步重跑</button>
+          <span id="rerun-msg"></span>
+        </div>
+        <div class="chk-row">
+          <label><input id="p-push" type="checkbox"> 核验后推送消息</label>
+          <label><input id="p-as-zip" type="checkbox"> 按人打成 ZIP 推送</label>
+          <label><input id="p-skip-tri" type="checkbox"> 已有成功包则跳过再合并</label>
+        </div>
+        <div class="pay-box">
+          <div class="lab">充值入口</div>
+          <div class="pay-btns">
+            <a href="https://api.easymail-sz.com/index/user/login" target="_blank" rel="noopener noreferrer">详细地址 / 联系方式<small>去充值</small></a>
+            <a href="https://dashboard.scrape.do" target="_blank" rel="noopener noreferrer">邮箱匹配<small>去充值</small></a>
+            <a href="https://www.tracerfy.com" target="_blank" rel="noopener noreferrer">剩余补全<small>去充值</small></a>
+            <a href="https://www.geeksend.com" target="_blank" rel="noopener noreferrer">邮箱预检<small>去充值</small></a>
+            <a href="https://platform.checknumber.ai" target="_blank" rel="noopener noreferrer">号码检测<small>去充值</small></a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="pipe-grid">
+    <div class="card span2">
+      <div class="hd">时间窗口</div>
+      <div class="bd">
+        <div class="form-row">
+          <div>
+            <label>收集截止</label>
+            <input id="p-collect-cutoff" class="short" type="text" placeholder="09:30">
+          </div>
+          <div>
+            <label>核验开始</label>
+            <input id="p-found-cutoff" class="short" type="text" placeholder="17:40">
+          </div>
+          <div>
+            <label>查出午间点（时，仅收集端收下才提前）</label>
+            <input id="p-noon" class="short" type="text" placeholder="12">
+          </div>
+          <div>
+            <label>查出规则起始日</label>
+            <input id="p-rule-start" class="short" type="text" placeholder="2026-10-01">
+          </div>
+          <div>
+            <label>收集轮询（秒）</label>
+            <input id="p-poll" class="short" type="text" placeholder="2">
+          </div>
+          <div>
+            <label>文件稳定（秒）</label>
+            <input id="p-stable" class="short" type="text" placeholder="1.2">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="hd">目录路径</div>
+      <div class="bd">
+        <div class="form-row">
+          <div>
+            <label>收集源目录</label>
+            <input id="p-wechat" class="wide" type="text">
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>待收集</label>
+            <input id="p-drop" class="wide" type="text">
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>原始数据</label>
+            <input id="p-dest" class="wide" type="text">
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>原始地址（详细地址归档）</label>
+            <input id="p-enhance" class="wide" type="text">
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>匹配数据</label>
+            <input id="p-match" class="wide" type="text">
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>店表必填列（逗号分隔）</label>
+            <input id="p-headers" class="wide" type="text" placeholder="店铺，买家全名，城市，州，邮编">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="hd">本机服务</div>
+      <div class="bd">
+        <div class="form-row">
+          <div>
+            <label>匹配服务</label>
+            <input id="p-match-url" type="text" placeholder="http://127.0.0.1:5000">
+          </div>
+          <div>
+            <label>核验服务</label>
+            <input id="p-detect-url" type="text" placeholder="http://127.0.0.1:8848">
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>匹配程序</label>
+            <input id="p-match-exe" class="wide" type="text">
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>核验程序</label>
+            <input id="p-detect-exe" class="wide" type="text">
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label>匹配模式</label>
+            <input id="p-mode" class="short" type="text" placeholder="2">
+          </div>
+          <div>
+            <label>邮箱并发</label>
+            <input id="p-conc" class="short" type="text" placeholder="50">
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
 <script>
 const API = (location.port === "8765" ? "" : "http://127.0.0.1:8765");
 const ST = { idle: "未开始", wait: "等待", run: "运行中", done: "已完成", fail: "失败" };
-const CH = { idle: "空闲", run: "作业进行中", wait: "等待核验点", done: "当日作业完成", fail: "作业失败" };
+const CH = { idle: "空闲", run: "作业进行中", wait: "等待中", done: "当日作业完成", fail: "作业失败" };
 let TAB = "all", DATA = null, TERM_PIN = true, TERM_FP = "", PROC_FP = "";
 async function api(path, opt) {
   const init = Object.assign({ cache: "no-store" }, opt || {});
@@ -497,7 +674,8 @@ async function api(path, opt) {
   let d = null;
   try { d = text ? JSON.parse(text) : {}; }
   catch (e) {
-    throw new Error("接口不是 JSON，请打开 http://127.0.0.1:8765/ 再试（勿用本地预览/文件打开）");
+    if (location.port === "8765") throw new Error("调度看板进程还是旧版，请重启进度看板后再打开");
+    throw new Error("请用 http://127.0.0.1:8765/ 打开调度系统（不要用本地预览）");
   }
   if (!r.ok) throw new Error((d && d.error) || ("HTTP " + r.status));
   return d;
@@ -527,6 +705,32 @@ function files(id, rows, withSkip) {
 function esc(s) {
   return String(s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
+function maskPublic(s) {
+  return String(s == null ? "" : s)
+    .replace(/Tracerfy/gi, "剩余补全")
+    .replace(/DetectSuite/gi, "核验")
+    .replace(/geeksend/gi, "邮箱预检")
+    .replace(/GeekSend/gi, "邮箱预检")
+    .replace(/CheckNumber/gi, "号码检测")
+    .replace(/scrape\.do/gi, "邮箱通道")
+    .replace(/EasyMail/gi, "详细地址服务")
+    .replace(/轻松邮/g, "详细地址服务")
+    .replace(/iMessage/gi, "即时消息")
+    .replace(/WhatsApp/gi, "会话号码")
+    .replace(/Apple ID/gi, "账号邮箱")
+    .replace(/AppleID/gi, "账号邮箱")
+    .replace(/apple-email/gi, "账号邮箱")
+    .replace(/apple_email/gi, "账号邮箱")
+    .replace(/API\s*预检/g, "邮箱预检")
+    .replace(/发信检测/g, "发信核验")
+    .replace(/\bsmtp\b/gi, "发信通道")
+    .replace(/当日 overview/gi, "当日成功包")
+    .replace(/open_id 私聊/g, "私聊推送")
+    .replace(/飞书/g, "推送")
+    .replace(/微信收集/g, "店表收集")
+    .replace(/微信库/g, "收集源")
+    .replace(/微信/g, "收集端");
+}
 function draw(d) {
   DATA = d;
   document.getElementById("clock").textContent = d.time + "　星期" + d.weekday;
@@ -537,11 +741,11 @@ function draw(d) {
     "</b>　邮箱并发 <b>" + d.concurrency + "</b>　刷新 2s";
   const c = d.collect || {}, m = d.matching || {}, v = d.detect || {}, f = d.feishu || {};
   const svcHtml = [
-    ["微信收集", c.daemon ? "在线" : "未启动", c.daemon ? "ok" : "off",
+    ["店表收集", c.daemon ? "在线" : "未启动", c.daemon ? "ok" : "off",
      "进程 " + (c.daemon_pid || "无") + "　守护 " + (c.supervise ? c.supervise_pid : "未启动")],
     ["数据匹配", m.up ? "连通" : "未连通", m.up ? "ok" : "off", m.url || ""],
     ["核验系统", v.up ? "连通" : "未连通", v.up ? "ok" : "off", v.url || ""],
-    ["飞书推送", f.app ? ((f.shops || 0) + " 家店对照") : "未配置", f.app ? "ok" : "off",
+    ["消息推送", f.app ? ((f.shops || 0) + " 家店对照") : "未配置", f.app ? "ok" : "off",
      (f.note || "私聊不进群") + (f.alert ? "" : "")]
   ].map(x => '<div class="card"><div class="n">' + x[0] + '</div><div class="v"><span class="dot ' + x[2] + '">●</span>' + x[1] + '</div><div class="p">' + x[3] + "</div></div>").join("");
   setHtml(document.getElementById("svc"), svcHtml);
@@ -550,9 +754,9 @@ function draw(d) {
     const p = j.tot ? (j.cur + " / " + j.tot) : "—";
     const bar = j.tot ? '<div class="track"><i style="width:' + j.pct + '%"></i></div>' : "—";
     const cls = j.state === "run" ? "sel" : "";
-    return '<tr class="' + cls + '"><td>' + j.no + "</td><td>" + j.name + "</td><td>" + tag(j.state) +
-      "</td><td>" + (j.id || "—") + "</td><td>" + (j.note || "—") + "</td><td>" + p + "</td><td>" + bar +
-      "</td><td>" + (j.tot ? (j.ok + " / " + j.fail) : "—") + "</td><td class='muted'>" + (j.extra || "") + "</td></tr>";
+    return '<tr class="' + cls + '"><td>' + j.no + "</td><td>" + esc(maskPublic(j.name)) + "</td><td>" + tag(j.state) +
+      "</td><td>" + esc(j.id || "—") + "</td><td>" + esc(maskPublic(j.note || "—")) + "</td><td>" + p + "</td><td>" + bar +
+      "</td><td>" + (j.tot ? (j.ok + " / " + j.fail) : "—") + "</td><td class='muted'>" + esc(maskPublic(j.extra || "")) + "</td></tr>";
   }).join("");
   setHtml(document.getElementById("jobs"), jobsHtml);
   document.getElementById("st-h").textContent = (d.stores || []).filter(x => !x.skip).length + " 张店表 / " + (d.stores || []).length + " 个文件";
@@ -569,9 +773,9 @@ function draw(d) {
   files("founds", d.found, false);
   files("outs", d.outputs, false);
   const engHtml = (d.engines || []).map(e =>
-    "<tr><td>" + e.name + "</td><td>" + tag(e.state) + "</td><td>" + e.phase + "</td><td>" +
+    "<tr><td>" + esc(maskPublic(e.name)) + "</td><td>" + tag(e.state) + "</td><td>" + esc(maskPublic(e.phase)) + "</td><td>" +
     (e.tot ? (e.cur + "/" + e.tot + "　" + e.pct + "%") : "—") + "</td><td>" + e.ok + "</td><td>" + e.fail +
-    "</td><td>" + e.unk + "</td><td class='muted'>" + (e.log || "—") + "</td></tr>"
+    "</td><td>" + e.unk + "</td><td class='muted'>" + esc(maskPublic(e.log || "—")) + "</td></tr>"
   ).join("");
   setHtml(document.getElementById("eng"), engHtml);
   const live = (d.terminals || []).filter(t => t.alive).length;
@@ -580,7 +784,7 @@ function draw(d) {
     ? d.terminals.map(t => {
         const on = t.alive ? "ok" : "off";
         return '<div class="proc ' + (t.alive ? "" : "off") + '"><span class="dot ' + on + '">●</span>' +
-          esc(t.name) + '<span class="pid">' + (t.pid || "—") + "</span>　" + esc(t.cmd || "") + "</div>";
+          esc(maskPublic(t.name)) + '<span class="pid">' + (t.pid || "—") + "</span>　" + esc(maskPublic(t.cmd || "")) + "</div>";
       }).join("")
     : '<div class="muted">没有扫到 python / pythonw 作业进程</div>';
   if (procHtml !== PROC_FP) {
@@ -594,15 +798,15 @@ function showLog(force) {
   const box = document.getElementById("term");
   let html = "";
   if (TAB === "pipe") {
-    html = esc((DATA.log || []).join("\n") || "暂无 pipeline.log");
+    html = esc(maskPublic((DATA.log || []).join("\n") || "暂无 pipeline.log"));
   } else if (TAB === "col") {
-    html = esc((DATA.collect_log || []).join("\n") || "暂无 collect.log");
+    html = esc(maskPublic((DATA.collect_log || []).join("\n") || "暂无 collect.log"));
   } else {
     const rows = (DATA.console || []).filter(r => TAB === "all" || r.src === TAB);
     html = rows.map(r =>
       '<span class="ln"><span class="ts">' + esc(r.ts || "") +
       '</span> <span class="s-' + esc(r.src) + '">[' + esc(r.src) + "]</span> " +
-      esc(r.text) + "</span>"
+      esc(maskPublic(r.text)) + "</span>"
     ).join("") || '<span class="muted">暂无记录</span>';
   }
   if (!force && html === TERM_FP) return;
@@ -636,17 +840,112 @@ function pipeMsg(text, err) {
   el.textContent = text || "";
   el.className = err ? "err" : "";
 }
+function rerunMsg(text, err) {
+  const el = document.getElementById("rerun-msg");
+  el.textContent = text || "";
+  el.className = err ? "err" : "";
+}
+function fmtBal(v, unit) {
+  if (v == null || v === "") return "";
+  const n = Number(v);
+  if (Number.isNaN(n)) return "";
+  const s = unit === "元" ? n.toFixed(2) : String(Math.round(n * 100) / 100);
+  return s + (unit ? " " + unit : "");
+}
+function fmtRemain(n) {
+  if (n == null || n === "") return "—";
+  const x = Math.floor(Number(n));
+  if (!Number.isFinite(x)) return "—";
+  if (x >= 100000) return "约 " + Math.round(x / 10000) + " 万条";
+  if (x >= 10000) return "约 " + (Math.round(x / 1000) / 10) + " 万条";
+  return "约 " + x + " 条";
+}
+function fundStatus(it, acct) {
+  if (acct) {
+    if (!acct.ok) return ["未查到", "st-miss"];
+    if (Number(acct.balance) <= 0) return ["不足", "st-low"];
+    return ["正常", "st-ok"];
+  }
+  if (!it.ok) return ["未查到", "st-miss"];
+  if (it.total != null && Number(it.total) <= 0) return ["不足", "st-low"];
+  return ["正常", "st-ok"];
+}
+function drawFunds(d) {
+  const wait = d.waiting || null;
+  const wel = document.getElementById("funds-wait");
+  const pending = (d.pending || []).length;
+  let stamp = "";
+  if (d.queried_at) {
+    stamp = "今日余额 " + d.queried_at + " 已查询";
+    if (pending) stamp += "，未查到的项后台继续查";
+  } else {
+    stamp = "今日尚未查询，后台会自动查一次";
+  }
+  wel.textContent = (wait && wait.step)
+    ? ("当前停在「" + wait.step + "」等充值（剩余 " + wait.have + " / 约需 " + wait.need + "，自 " + (wait.since || "") + "）")
+    : stamp;
+  const sel = document.getElementById("rerun-from");
+  const cur = sel.value;
+  const steps = d.steps || [];
+  if (steps.length) {
+    sel.innerHTML = steps.map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + "</option>").join("");
+    if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+  }
+  const items = (d.items || []).filter(it => it.id !== "contact");
+  const kpi = document.getElementById("funds-kpi");
+  if (!items.length) {
+    kpi.innerHTML = "";
+    document.getElementById("funds-box").innerHTML =
+      '<div class="muted">' +
+      (!d.matching_up && !d.detect_up ? "匹配 / 核验未连通，无法查余额。请确认本机服务已启动，并重启进度看板。" : "没有查到花费账户") +
+      "</div>";
+    return;
+  }
+  const lowN = items.filter(it => it.ok && it.total != null && Number(it.total) <= 0).length;
+  const missN = items.filter(it => !it.ok).length;
+  const okN = items.filter(it => it.ok && !(it.total != null && Number(it.total) <= 0)).length;
+  kpi.innerHTML =
+    '<div class="cell"><div class="k">工序</div><div class="n">' + items.length + "</div></div>" +
+    '<div class="cell"><div class="k">正常</div><div class="n">' + okN + "</div></div>" +
+    '<div class="cell"><div class="k">不足</div><div class="n' + (lowN ? " low" : "") + '">' + lowN + "</div></div>" +
+    '<div class="cell"><div class="k">未查到</div><div class="n">' + missN + "</div></div>";
+  const rows = items.map(it => {
+    const st = fundStatus(it);
+    const name = it.id === "enhance" ? "详细地址 / 联系方式" : it.name;
+    const bal = it.ok && it.total != null ? fmtBal(it.total, it.unit) : (it.error || "未查到");
+    const left = it.ok && it.remain_rows != null ? fmtRemain(it.remain_rows) : "—";
+    return "<tr><td>" + esc(name) + "</td><td>" + esc(bal) + "</td><td>" + esc(left) +
+      '</td><td class="' + st[1] + '">' + st[0] + "</td></tr>";
+  });
+  document.getElementById("funds-box").innerHTML =
+    "<table><thead><tr><th>工序</th><th style='width:140px'>余额</th><th style='width:110px'>还可约</th><th style='width:72px'>状态</th></tr></thead><tbody>" +
+    rows.join("") + "</tbody></table>";
+}
+async function loadFunds(refresh) {
+  const box = document.getElementById("funds-box");
+  const kpi = document.getElementById("funds-kpi");
+  if (refresh) {
+    box.textContent = "补查中…";
+    if (kpi) kpi.innerHTML = "";
+  }
+  try {
+    drawFunds(await api(refresh ? "/api/funds-board?refresh=1" : "/api/funds-board"));
+  } catch (e) {
+    box.textContent = String(e);
+  }
+}
 function shopRows() {
-  return [...document.querySelectorAll("#shop-tb tr")].map(tr => ({
+  return [...document.querySelectorAll("#shop-tb .shop-item")].map(tr => ({
     shop: (tr.querySelector(".s-shop") || {}).value || "",
     user: (tr.querySelector(".s-user") || {}).value || "",
   })).filter(r => r.shop.trim() && r.user.trim());
 }
 function addShopRow(shop, user) {
-  const tr = document.createElement("tr");
-  tr.innerHTML = '<td><input class="s-shop" type="text" placeholder="B店 或 B店,C店" value="' + esc(shop || "") +
-    '"></td><td><input class="s-user" type="text" placeholder="姓名 或 张三,李四" value="' + esc(user || "") +
-    '"></td><td><a href="#" class="s-del">删除</a></td>';
+  const tr = document.createElement("div");
+  tr.className = "shop-item";
+  tr.innerHTML = '<input class="s-shop" type="text" placeholder="B店" value="' + esc(shop || "") +
+    '"><input class="s-user" type="text" placeholder="姓名" value="' + esc(user || "") +
+    '"><a href="#" class="s-del">删</a>';
   tr.querySelector(".s-del").onclick = ev => { ev.preventDefault(); tr.remove(); };
   document.getElementById("shop-tb").appendChild(tr);
 }
@@ -661,6 +960,108 @@ async function loadSettings() {
     (d.alert_on ? ("告警机器人 " + (d.alert_app_id || "已配置")) : "告警机器人未配置");
   document.getElementById("shop-tb").innerHTML = "";
   (d.shops || []).forEach(x => addShopRow(x.shop, x.user));
+  syncHistMode();
+  loadHistoryDays().catch(e => histMsg(String(e), true));
+}
+function histMsg(t, err) {
+  const el = document.getElementById("hist-msg");
+  el.textContent = t || "";
+  el.className = err ? "err" : "";
+}
+const HIST_CUSTOM = "__custom__";
+let HIST_DAYS = [];
+function histDayKeyFromIso(iso) {
+  const p = String(iso || "").split("-").map(Number);
+  if (p.length < 3 || !p[1] || !p[2]) return "";
+  return p[1] + "月/" + p[1] + "." + String(p[2]).padStart(2, "0");
+}
+function histIsoFromKey(key) {
+  const hit = HIST_DAYS.find(x => x.key === key);
+  if (hit && hit.iso) return hit.iso;
+  const m = String(key || "").match(/^(\d{1,2})月\/(\d{1,2})\.(\d{2})$/);
+  if (!m) return "";
+  const now = new Date();
+  let y = now.getFullYear();
+  const dt = new Date(y, Number(m[1]) - 1, Number(m[3]));
+  if (dt > now) y -= 1;
+  return y + "-" + String(m[1]).padStart(2, "0") + "-" + m[3];
+}
+function recentHistDays(days) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+  return (days || []).filter(x => {
+    const iso = x.iso || histIsoFromKey(x.key);
+    if (!iso) return false;
+    const t = new Date(iso + "T00:00:00");
+    return t >= start && t <= now;
+  });
+}
+function histDayKey() {
+  const sel = document.getElementById("hist-day");
+  if (sel.value === HIST_CUSTOM) return histDayKeyFromIso(document.getElementById("hist-pick").value);
+  return sel.value;
+}
+function syncHistDayPick() {
+  const custom = document.getElementById("hist-day").value === HIST_CUSTOM;
+  document.getElementById("hist-pick-wrap").classList.toggle("hide", !custom);
+}
+async function loadHistoryDays() {
+  const d = await api("/api/feishu-history");
+  HIST_DAYS = d.days || [];
+  const sel = document.getElementById("hist-day");
+  const cur = histDayKey();
+  const recent = recentHistDays(HIST_DAYS);
+  const pick = document.getElementById("hist-pick");
+  const today = new Date();
+  pick.max = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0") + "-" + String(today.getDate()).padStart(2, "0");
+  sel.innerHTML = (recent.length
+    ? recent.map(x => '<option value="' + esc(x.key) + '">' + esc(x.label + "　" + x.mtime) + "</option>").join("")
+    : '<option value="">（近7天没有汇总 ZIP）</option>') +
+    '<option value="' + HIST_CUSTOM + '">自选日期…</option>';
+  if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+  else if (cur) {
+    sel.value = HIST_CUSTOM;
+    pick.value = histIsoFromKey(cur);
+  }
+  syncHistDayPick();
+  if (histDayKey()) await loadHistoryPreview();
+}
+async function loadHistoryPreview() {
+  const key = histDayKey();
+  const box = document.getElementById("hist-shops");
+  const zel = document.getElementById("hist-zips");
+  if (!key) {
+    zel.textContent = "先选日期";
+    box.innerHTML = "";
+    return;
+  }
+  const d = await api("/api/feishu-history?day=" + encodeURIComponent(key));
+  zel.textContent = (d.zips || []).map(z => z.name + "（" + z.size_h + "）").join("　") || "没有汇总 ZIP";
+  if (!document.getElementById("hist-to").value && d.summary_a_to) {
+    document.getElementById("hist-to").placeholder = "默认汇总A → " + d.summary_a_to;
+  }
+  const shops = (d.shops || []).filter(s => (s.users || []).length);
+  box.innerHTML = shops.map(s =>
+    '<tr><td><input type="checkbox" class="h-shop" value="' + esc(s.shop) + '"></td>' +
+    "<td>" + esc(s.shop) + "</td><td>" + esc((s.users || []).join("、")) + "</td>" +
+    "<td>" + esc((s.files || []).join("、")) + "</td></tr>"
+  ).join("") || '<tr><td colspan="4" class="muted">没有已对照的店</td></tr>';
+}
+function histPacks() {
+  const packs = [];
+  if (document.getElementById("hist-pack-a").checked) packs.push("A");
+  if (document.getElementById("hist-pack-b").checked) packs.push("B");
+  return packs;
+}
+function syncHistMode() {
+  const mode = document.getElementById("hist-mode").value;
+  const shops = mode === "shops";
+  document.getElementById("hist-pack-row").classList.toggle("hide", shops);
+  const toWrap = document.getElementById("hist-to").closest("div");
+  if (toWrap) toWrap.classList.toggle("hide", shops);
+}
+function histShops() {
+  return [...document.querySelectorAll("#hist-shops .h-shop:checked")].map(x => x.value);
 }
 async function loadPipeSettings() {
   const d = await api("/api/pipeline-settings");
@@ -723,7 +1124,18 @@ document.querySelectorAll("#nav a").forEach(a => a.onclick = () => {
   document.getElementById("page-pipe").classList.toggle("hide", page !== "pipe");
   document.getElementById("bar").classList.toggle("hide", page !== "job");
   if (page === "set") loadSettings().catch(e => setMsg(String(e), true));
-  if (page === "pipe") loadPipeSettings().catch(e => pipeMsg(String(e), true));
+  if (page === "pipe") {
+    loadPipeSettings().catch(e => pipeMsg(String(e), true));
+    loadFunds();
+  }
+});
+document.querySelectorAll("#pipe-side a").forEach(a => a.onclick = ev => {
+  ev.preventDefault();
+  document.querySelectorAll("#pipe-side a").forEach(x => x.classList.remove("on"));
+  a.classList.add("on");
+  const pane = a.dataset.pane;
+  document.querySelectorAll(".pipe-pane").forEach(p => p.classList.toggle("hide", p.id !== "pane-" + pane));
+  if (pane === "funds") loadFunds();
 });
 document.getElementById("btn-add").onclick = () => addShopRow("", "");
 document.getElementById("btn-save").onclick = async () => {
@@ -743,11 +1155,45 @@ document.getElementById("btn-save").onclick = async () => {
     setMsg("已保存，下次推送生效");
   } catch (e) { setMsg(String(e), true); }
 };
+document.getElementById("hist-day").onchange = () => {
+  syncHistDayPick();
+  if (document.getElementById("hist-day").value === HIST_CUSTOM && !document.getElementById("hist-pick").value) {
+    document.getElementById("hist-zips").textContent = "请选日期";
+    document.getElementById("hist-shops").innerHTML = "";
+    return;
+  }
+  loadHistoryPreview().catch(e => histMsg(String(e), true));
+};
+document.getElementById("hist-pick").onchange = () => loadHistoryPreview().catch(e => histMsg(String(e), true));
+document.getElementById("hist-mode").onchange = syncHistMode;
+document.getElementById("btn-hist-push").onclick = async () => {
+  const day = histDayKey();
+  const mode = document.getElementById("hist-mode").value;
+  const to = document.getElementById("hist-to").value.trim();
+  const shops = histShops();
+  if (!day) { histMsg("先选日期", true); return; }
+  if (mode !== "shops" && !histPacks().length) { histMsg("请勾选汇总A或汇总B", true); return; }
+  if (mode === "shops" && !shops.length) { histMsg("请勾选要补发的店", true); return; }
+  if (mode === "zip" && !to) { histMsg("整包补发请填接收人", true); return; }
+  const tip = mode === "shops"
+    ? ("按店对照补发 " + day + (shops.length ? "（" + shops.length + " 家店）" : "（全部有对照的店）") + "？")
+    : ("把 " + day + " 发给 " + (to || "默认汇总A接收人") + "？");
+  if (!confirm(tip + "\n只私聊，不进群。")) return;
+  histMsg("发送中…");
+  try {
+    const d = await api("/api/feishu-history-push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ day, mode, to, shops, packs: histPacks() }),
+    });
+    histMsg(d.msg || "已发送");
+  } catch (e) { histMsg(String(e), true); }
+};
 document.getElementById("btn-alert").onclick = async () => {
   setMsg("发送中…");
   try {
     await api("/api/feishu-test-alert", { method: "POST" });
-    setMsg("已测发，请在飞书搜告警机器人看私聊");
+    setMsg("已测发，请在告警会话里查看");
   } catch (e) { setMsg(String(e), true); }
 };
 document.getElementById("btn-pipe-save").onclick = async () => {
@@ -760,6 +1206,52 @@ document.getElementById("btn-pipe-save").onclick = async () => {
     });
     pipeMsg("已保存。时间 / 路径 / 并发请点「重启日更」");
   } catch (e) { pipeMsg(String(e), true); }
+};
+document.getElementById("btn-funds-refresh").onclick = ev => {
+  ev.preventDefault();
+  loadFunds(true);
+};
+setInterval(() => {
+  if (!document.getElementById("page-pipe").classList.contains("hide")) loadFunds();
+}, 20000);
+document.getElementById("btn-rerun").onclick = async () => {
+  const step = document.getElementById("rerun-from").value;
+  const name = document.getElementById("rerun-from").selectedOptions[0]
+    ? document.getElementById("rerun-from").selectedOptions[0].text
+    : step;
+  if (!step) { rerunMsg("请选择从哪一步重跑", true); return; }
+  if (!confirm("结束当前日更，从「" + name + "」开始往后重跑？\n本步也会重跑。")) return;
+  rerunMsg("正在后台拉起…");
+  try {
+    const d = await api("/api/rerun", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ from: step }),
+    });
+    rerunMsg(d.msg || "已开始重跑");
+  } catch (e) { rerunMsg(String(e), true); }
+};
+document.getElementById("btn-restart-dash").onclick = async () => {
+  if (!confirm("重启进度看板？页面会短暂断开，几秒后自动刷新。")) return;
+  document.getElementById("clock").textContent = "看板重启中…";
+  try {
+    await api("/api/restart-dashboard", { method: "POST" });
+  } catch (e) {}
+  let n = 0;
+  const t = setInterval(async () => {
+    n += 1;
+    try {
+      const r = await fetch(API + "/api/snapshot", { cache: "no-store" });
+      if (r.ok) {
+        clearInterval(t);
+        location.reload();
+      }
+    } catch (e) {}
+    if (n > 40) {
+      clearInterval(t);
+      location.reload();
+    }
+  }, 400);
 };
 document.getElementById("btn-pipe-restart").onclick = async () => {
   if (!confirm("结束当前日更并按最新配置重新拉起？\n（匹配已完成时不必点，日更会在核验点自动继续）")) return;

@@ -6,17 +6,22 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.parse import parse_qs, urlparse
+from urllib.request import ProxyHandler, Request, build_opener
 
 HERE = Path(__file__).resolve().parent
 CFG_PATH = HERE / "config.json"
 HTML_PATH = HERE / "dashboard.html"
+FUNDS_CACHE = HERE / "funds-board.json"
 PORT = 8765
+_FUNDS_LOCK = threading.Lock()
+_FUNDS_RETRY_SEC = 180
+_FUNDS_IDS = ("enhance", "email", "tracerfy", "precheck", "numbers")
 SKIP = ("测试", "查邮箱", "查地址", "好评", "差评", "每日数据", "内部cyx",
         "链接查", "精准", "联系方式", "匹配成功", "匹配失败", "精简版")
 
@@ -37,11 +42,16 @@ def load_cfg() -> dict:
     return cfg
 
 
+# 本机匹配/核验必须直连。系统开了 Clash 时 urllib 会走 HTTP_PROXY，
+# 把 127.0.0.1:5000/8848 打到 7890，探测超时，页面刷新就会卡几秒。
+_LOCAL = build_opener(ProxyHandler({}))
+
+
 def get_json(url: str, timeout: float = 0.7) -> tuple[dict | None, int]:
     t0 = time.perf_counter()
     try:
         req = Request(url, headers={"Accept": "application/json"})
-        with urlopen(req, timeout=timeout) as r:
+        with _LOCAL.open(req, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8", "replace"))
         ms = int((time.perf_counter() - t0) * 1000)
         return (data if isinstance(data, dict) else None), ms
@@ -52,19 +62,30 @@ def get_json(url: str, timeout: float = 0.7) -> tuple[dict | None, int]:
 
 def http_up(url: str, timeout: float = 1.5) -> bool:
     try:
-        with urlopen(Request(url), timeout=timeout) as r:
+        with _LOCAL.open(Request(url), timeout=timeout) as r:
             return 200 <= r.status < 400
     except Exception:
         return False
 
 
-def tail_lines(path: Path, n: int = 40) -> list[str]:
+def read_lines(path: Path) -> list[str]:
     if not path.is_file():
         return []
     try:
-        return path.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
+        return path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return []
+
+
+def tail_lines(path: Path, n: int = 40) -> list[str]:
+    if n <= 0:
+        return []
+    return read_lines(path)[-n:]
+
+
+def lines_on_day(path: Path, day: str) -> list[str]:
+    prefix = f"{day} "
+    return [ln for ln in read_lines(path) if ln.startswith(prefix)]
 
 
 _TS = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(.*)$")
@@ -72,11 +93,37 @@ DASH_PID = HERE / "dashboard.pid"
 DETECT_PID = HERE / "detect.pid"
 
 
+_PUBLIC_MASK = (
+    (re.compile(r"Tracerfy", re.I), "剩余补全"),
+    (re.compile(r"轻松邮"), "详细地址服务"),
+    (re.compile(r"GeekSend", re.I), "邮箱预检"),
+    (re.compile(r"CheckNumber", re.I), "号码检测"),
+    (re.compile(r"scrape\.do", re.I), "邮箱通道"),
+    (re.compile(r"EasyMail", re.I), "详细地址服务"),
+    (re.compile(r"iMessage", re.I), "即时消息"),
+    (re.compile(r"WhatsApp", re.I), "会话号码"),
+    (re.compile(r"Apple ID", re.I), "账号邮箱"),
+    (re.compile(r"apple-email", re.I), "账号邮箱"),
+    (re.compile(r"apple_email", re.I), "账号邮箱"),
+    (re.compile(r"飞书"), "推送"),
+    (re.compile(r"微信收集"), "店表收集"),
+    (re.compile(r"微信库"), "收集源"),
+    (re.compile(r"微信"), "收集端"),
+)
+
+
+def mask_public(text: str) -> str:
+    s = str(text or "")
+    for pat, rep in _PUBLIC_MASK:
+        s = pat.sub(rep, s)
+    return s
+
+
 def parse_log_line(line: str, src: str) -> dict:
     m = _TS.match(line)
     if m:
-        return {"ts": m.group(1), "src": src, "text": m.group(2), "raw": line}
-    return {"ts": "", "src": src, "text": line, "raw": line}
+        return {"ts": m.group(1), "src": src, "text": mask_public(m.group(2)), "raw": line}
+    return {"ts": "", "src": src, "text": mask_public(line), "raw": line}
 
 
 def merged_logs(n: int = 160) -> list[dict]:
@@ -89,7 +136,7 @@ def merged_logs(n: int = 160) -> list[dict]:
 
 def _pid_file_consoles() -> list[dict]:
     mapping = (
-        (HERE / "collect_daemon.pid", "微信收集", "收集", "collect_wechat.py --daemon"),
+        (HERE / "collect_daemon.pid", "店表收集", "收集", "collect_wechat.py --daemon"),
         (HERE / "collect_supervise.pid", "收集守护", "收集", "collect_wechat.py --supervise"),
         (HERE / "pipeline.pid", "当日链路", "链路", "run_pipeline.py --daily"),
         (DETECT_PID, "核验闸门", "链路", "run_detect.py"),
@@ -285,11 +332,11 @@ def _n(s: dict, *keys) -> int:
 
 def engine_counts(name: str, s: dict) -> tuple[int, int, int]:
     """核验各引擎字段不同：邮箱用 valid/invalid，号码/Apple 用渠道计数字段。"""
-    if name == "iMessage":
+    if name in ("即时消息", "iMessage"):
         return _n(s, "imessage"), _n(s, "sms"), _n(s, "unknown")
-    if name == "WhatsApp":
+    if name in ("会话号码", "WhatsApp"):
         return _n(s, "whatsapp"), _n(s, "no"), _n(s, "unknown")
-    if name == "Apple ID":
+    if name in ("账号邮箱", "Apple ID"):
         return _n(s, "apple"), _n(s, "no"), _n(s, "unknown")
     return _n(s, "valid"), _n(s, "invalid"), _n(s, "unknown")
 
@@ -353,9 +400,12 @@ def snapshot() -> dict:
     dbase = (cfg.get("detect_url") or "http://127.0.0.1:8848").rstrip("/")
     matching_up = http_up(f"{mbase}/modules", 1.5)
     match_ms = 0
-    enh_raw, _ = get_json(f"{mbase}/address-enhance/tasks-list?page_size=8")
-    emi_raw, _ = get_json(f"{mbase}/em-info/tasks?page_size=8")
-    em_raw, _ = get_json(f"{mbase}/lookup/tasks-list?mode=email&page_size=8")
+    enh_raw = emi_raw = em_raw = tf_raw = None
+    if matching_up:
+        enh_raw, _ = get_json(f"{mbase}/address-enhance/tasks-list?page_size=8")
+        emi_raw, _ = get_json(f"{mbase}/em-info/tasks?page_size=8")
+        em_raw, _ = get_json(f"{mbase}/lookup/tasks-list?mode=email&page_size=8")
+        tf_raw, _ = get_json(f"{mbase}/tracerfy/tasks")
     enhance = pick_today((enh_raw or {}).get("items") or [], today)
     emi_items = (emi_raw or {}).get("items") or []
     emi = next((it for it in emi_items if str(it.get("status") or "").lower() in ("em_running", "running")), None)
@@ -374,20 +424,20 @@ def snapshot() -> dict:
         smtp, geek, imsg, wa, apple = smtp or {}, geek or {}, imsg or {}, wa or {}, apple or {}
 
     em_live = None
-    if email and str(email.get("status") or "").lower().startswith("run"):
+    if matching_up and email and str(email.get("status") or "").lower().startswith("run"):
         tid = email.get("id") or email.get("task_id")
         if tid:
             em_live, _ = get_json(f"{mbase}/lookup/batch-status/{tid}")
             em_live = em_live or {}
 
-    tf_raw, _ = get_json(f"{mbase}/tracerfy/tasks")
     tf_list = (tf_raw or {}).get("tasks") or (tf_raw or {}).get("items") or []
     tracer = next((it for it in tf_list if str(it.get("status") or it.get("state") or "").lower()
                    in ("running", "queued", "processing", "submitted")), None)
 
     logs = tail_lines(HERE / "pipeline.log", 50)
     clog = tail_lines(HERE / "collect.log", 30)
-    joined = "\n".join(logs[-80:])
+    day_logs = lines_on_day(HERE / "pipeline.log", today)
+    joined = "\n".join(day_logs)
 
     def hit(*keys: str) -> bool:
         return any(k in joined for k in keys)
@@ -406,8 +456,9 @@ def snapshot() -> dict:
     elif hit("详细地址数据库任务"):
         eh_state = "done"
 
-    gate_wait = pipe_alive and any("再核验" in x for x in logs[-8:]) and not any(
-        "已到" in x and "开始核验" in x for x in logs[-8:]
+    recent = day_logs[-8:]
+    gate_wait = pipe_alive and any("再核验" in x for x in recent) and not any(
+        "已到" in x and "开始核验" in x for x in recent
     )
 
     eh_fs_state = "idle"
@@ -475,7 +526,7 @@ def snapshot() -> dict:
     shop_map = cfg.get("feishu_shop_users") or {}
     shop_n = len(shop_map) if isinstance(shop_map, dict) else 0
     copy_n = len(_name_list(cfg.get("feishu_copy_to")))
-    sum_a = str(cfg.get("feishu_summary_a_to") or "").strip()
+    sum_a = _open_id_of(cfg, str(cfg.get("feishu_summary_a_to") or "").strip())
     push_on = bool(str(cfg.get("feishu_app_id") or "").strip())
     fs_extra = "私聊店员 + 抄送，不进群"
     if shop_n:
@@ -483,29 +534,40 @@ def snapshot() -> dict:
     fs_state = "idle"
     if not push_on:
         fs_note = "未配置表格机器人"
-    elif hit("按人已发送ZIP", "按店发送结束", "飞书已发送汇总A"):
-        fs_state, fs_note = "done", "已私聊送达（含抄送）"
-    elif hit("按店发送失败"):
-        fs_state, fs_note = "fail", "私聊失败，本地 ZIP 保留"
-    elif zip_state == "done" or hit("核验链路完成"):
+    elif hit("整条链路完成", "核验链路完成"):
+        if hit("按人已发送ZIP", "按店发送结束", "飞书已发送汇总A"):
+            fs_state, fs_note = "done", "已私聊送达（含抄送）"
+        elif hit("按店发送失败", "按店推送部分失败"):
+            fs_state, fs_note = "fail", "私聊失败，本地 ZIP 保留"
+        else:
+            fs_state, fs_note = "wait", "核验完后按人私聊"
+    elif zip_state == "done":
         fs_state, fs_note = "wait", "核验完后按人私聊"
     else:
         fs_note = "核验完后按人私聊，不进群"
 
-    geek_row = engine_row("API 预检", geek)
-    smtp_row = engine_row("发信检测", smtp)
-    im_row = engine_row("iMessage", imsg)
-    wa_row = engine_row("WhatsApp", wa)
-    ap_row = engine_row("Apple ID", apple)
+    geek_row = engine_row("邮箱预检", geek)
+    smtp_row = engine_row("发信核验", smtp)
+    im_row = engine_row("即时消息", imsg)
+    wa_row = engine_row("会话号码", wa)
+    ap_row = engine_row("账号邮箱", apple)
     if hit("API预检") and geek_row["state"] == "idle" and chain_live:
         geek_row["state"] = "run"
     if hit("发信检测") and smtp_row["state"] == "idle" and chain_live:
         smtp_row["state"] = "run"
+    detect_busy = any(r["state"] == "run" for r in (geek_row, smtp_row, im_row, wa_row, ap_row))
+    detect_today = hit("导入核验系统", "核验链路", "开始核验", "API预检", "发信检测")
+    if not detect_busy and not detect_today:
+        for row in (geek_row, smtp_row, im_row, wa_row, ap_row):
+            if row["state"] == "done":
+                row["state"] = "idle"
+                row["cur"] = row["tot"] = row["ok"] = row["fail"] = 0
+                row["pct"] = 0
 
     jobs = [
-        {"no": "01", "name": "微信收集", "state": collect_state,
+        {"no": "01", "name": "店表收集", "state": collect_state,
          "id": f"PID {daemon}" if daemon else "—",
-         "note": "登录微信 + 文件自动下载",
+         "note": "登录收集端 + 文件自动下载",
          "cur": len(stores_ok), "tot": len(stores_ok),
          "ok": len(stores_ok), "fail": len(stores) - len(stores_ok),
          "extra": f"店表 {len(stores_ok)}　查出 {len(found)}　守护 {'在线' if pid_alive(supervise) else '未启动'}"},
@@ -515,13 +577,13 @@ def snapshot() -> dict:
          "cur": int(eh.get("processed") or 0), "tot": int(eh.get("total") or 0),
          "ok": int(eh.get("success") or 0), "fail": int(eh.get("failed") or 0),
          "extra": str(eh.get("state") or "")},
-        {"no": "02b", "name": "地址ZIP飞书", "state": eh_fs_state,
+        {"no": "02b", "name": "地址包推送", "state": eh_fs_state,
          "id": str(eh.get("task_id") or "—"),
          "note": eh_fs_note, "cur": 0, "tot": 0, "ok": 0, "fail": 0,
          "extra": "私聊 " + (str(cfg.get("feishu_enhance_to") or "17.").strip() or "17.") + "，不进群"},
         {"no": "02c", "name": "联系方式", "state": emi_state,
          "id": str(emi.get("id") or "—") if emi else "—",
-         "note": str(emi.get("message") or emi.get("filename") or "轻松邮全量")[:80],
+         "note": mask_public(str(emi.get("message") or emi.get("filename") or "联系方式全量"))[:80],
          "cur": int(emi.get("phone") or 0) if emi else 0,
          "tot": int(emi.get("send") or emi.get("total") or 0) if emi else 0,
          "ok": int(emi.get("phone") or 0) + int(emi.get("email") or 0) if emi else 0,
@@ -532,7 +594,7 @@ def snapshot() -> dict:
          "note": em_name or str((email or {}).get("original_filename") or "")[:80],
          "cur": em_cur, "tot": em_tot, "ok": em_ok, "fail": em_fail,
          "extra": rate_per_min(em_cur, (email or {}).get("created_at")) or str((email or {}).get("status") or "")},
-        {"no": "04", "name": "Tracerfy", "state": tf_state,
+        {"no": "04", "name": "剩余补全", "state": tf_state,
          "id": str((tracer or {}).get("id") or (tracer or {}).get("task_id") or "—"),
          "note": "付费补全剩余" if tf_state != "idle" else "未开始",
          "cur": int((tracer or {}).get("hit_rows") or 0),
@@ -545,7 +607,7 @@ def snapshot() -> dict:
          "fail": 0, "extra": f"{len(outputs)} 个产出文件"},
         {"no": "06", "name": "核验导入", "state": imp_state, "id": "DetectSuite",
          "note": "三源 ZIP 导入拆分表", "cur": 0, "tot": 0, "ok": 0, "fail": 0, "extra": ""},
-        {"no": "07", "name": geek_row["name"], "state": geek_row["state"], "id": "geeksend",
+        {"no": "07", "name": geek_row["name"], "state": geek_row["state"], "id": "Aliyun",
          "note": geek_row["log"] or geek_row["phase"], "cur": geek_row["cur"], "tot": geek_row["tot"],
          "ok": geek_row["ok"], "fail": geek_row["fail"], "extra": geek_row["phase"]},
         {"no": "08", "name": smtp_row["name"], "state": smtp_row["state"], "id": "smtp",
@@ -563,7 +625,7 @@ def snapshot() -> dict:
         {"no": "12", "name": "汇总导出", "state": zip_state, "id": "summary/zip",
          "note": str(match_dir), "cur": 0, "tot": 0, "ok": 0, "fail": 0,
          "extra": "汇总A + 汇总B"},
-        {"no": "13", "name": "飞书推送", "state": fs_state, "id": "open_id 私聊",
+        {"no": "13", "name": "消息推送", "state": fs_state, "id": "open_id 私聊",
          "note": fs_note, "cur": 0, "tot": 0, "ok": 0, "fail": 0,
          "extra": fs_extra + (f"　汇总A→{sum_a}" if sum_a else "")},
     ]
@@ -573,13 +635,13 @@ def snapshot() -> dict:
     if gate_wait:
         jobs.insert(8, {
             "no": "05b", "name": "等待核验点", "state": "wait",
-            "id": "found_cutoff", "note": "无新增查出，等到点再核验",
+            "id": "found_cutoff", "note": "无收集端新查出，等到点再核验",
             "cur": 0, "tot": 0, "ok": 0, "fail": 0, "pct": 0,
             "extra": str(cfg.get("found_cutoff") or "17:40"),
         })
 
     # 微信收集是常驻守护，不算当前工序
-    run_jobs = [j["name"] for j in jobs if j["state"] == "run" and j["name"] != "微信收集"]
+    run_jobs = [j["name"] for j in jobs if j["state"] == "run" and j["name"] != "店表收集"]
     if run_jobs:
         active = " / ".join(run_jobs)
     elif gate_wait:
@@ -593,12 +655,38 @@ def snapshot() -> dict:
     if hit("整条链路完成") and not pipe_alive:
         active = "已完成"
 
+    fw = None
+    try:
+        from funds import read_wait
+        fw = read_wait()
+    except Exception:
+        fw = None
+    if fw and fw.get("step"):
+        step = str(fw.get("step") or "")
+        aliases = {
+            "详细地址匹配": ("详细地址",),
+            "联系方式匹配": ("联系方式",),
+            "邮箱匹配": ("邮箱匹配",),
+            "剩余补全": ("剩余补全",),
+            "Tracerfy": ("剩余补全",),
+            "邮箱预检": ("邮箱预检",),
+            "API预检": ("邮箱预检",),
+            "号码检测": ("即时消息", "会话号码", "账号邮箱"),
+        }
+        extra = f"剩余 {fw.get('have')}，约需 {fw.get('need')}，等充值"
+        for j in jobs:
+            if j["name"] in aliases.get(step, (step,)):
+                j["state"] = "wait"
+                j["note"] = "余额不足，不跑，等充值"
+                j["extra"] = extra
+        active = "等待充值：" + step
+
     chain = "run" if pipe_alive or chain_live else "idle"
     if logs and "失败:" in logs[-1] and pipe_age is not None and pipe_age < 120:
         chain = "fail"
-    if gate_wait:
+    if gate_wait or (fw and fw.get("step")):
         chain = "wait"
-    if hit("整条链路完成") and not pipe_alive:
+    elif hit("整条链路完成") and not pipe_alive:
         chain = "done"
 
     board_brief = {}
@@ -688,6 +776,34 @@ def _split_cells(raw) -> list[str]:
     return [x.strip() for x in re.split(r"[,，;；、\s]+", text) if x.strip()]
 
 
+def _open_id_of(cfg: dict, name: str) -> str:
+    n = str(name or "").strip()
+    if not n:
+        return ""
+    if n.startswith("ou_") or n.startswith("on_"):
+        return n
+    oids = cfg.get("feishu_open_ids") or {}
+    if isinstance(oids, dict):
+        hit = str(oids.get(n) or "").strip()
+        if hit:
+            return hit
+    return n
+
+
+def _store_receiver(cfg: dict, raw: str) -> str:
+    n = str(raw or "").strip()
+    if not n:
+        return ""
+    if n.startswith("ou_") or n.startswith("on_"):
+        oids = cfg.get("feishu_open_ids") or {}
+        if isinstance(oids, dict):
+            for name, oid in oids.items():
+                if str(oid or "").strip() == n:
+                    return str(name)
+        return n
+    return n
+
+
 def feishu_settings() -> dict:
     cfg = load_cfg()
     shops = []
@@ -710,7 +826,7 @@ def feishu_settings() -> dict:
     return {
         "shops": shops,
         "enhance_to": str(cfg.get("feishu_enhance_to") or ""),
-        "summary_a_to": str(cfg.get("feishu_summary_a_to") or ""),
+        "summary_a_to": _open_id_of(cfg, str(cfg.get("feishu_summary_a_to") or "")),
         "copy_to": _name_list(cfg.get("feishu_copy_to")),
         "alert_to": _name_list(cfg.get("feishu_alert_to")),
         "alert_app_id": str(cfg.get("feishu_alert_app_id") or ""),
@@ -735,7 +851,7 @@ def save_feishu_settings(body: dict) -> dict:
                     bucket.append(user)
     data["feishu_shop_users"] = mapping
     data["feishu_enhance_to"] = str(body.get("enhance_to") or "").strip()
-    data["feishu_summary_a_to"] = str(body.get("summary_a_to") or "").strip()
+    data["feishu_summary_a_to"] = _store_receiver(data, str(body.get("summary_a_to") or "").strip())
     data["feishu_copy_to"] = _name_list(body.get("copy_to"))
     data["feishu_alert_to"] = _name_list(body.get("alert_to"))
     CFG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -858,6 +974,474 @@ def _kill_run_pipeline_pids() -> list[int]:
     return killed
 
 
+_DAY_FOLDER_RE = re.compile(r"^\d{1,2}\.\d{2}$")
+_DAY_KEY_RE = re.compile(r"^(\d{1,2}月)/(\d{1,2}\.\d{2})$")
+
+
+def _match_root() -> Path:
+    return Path(load_cfg().get("match_dest_root") or r"D:\桌面\地址匹配源文件\匹配数据")
+
+
+def _summary_zips(folder: Path) -> list[Path]:
+    if not folder.is_dir():
+        return []
+    return sorted(
+        (p for p in folder.glob("*.zip") if p.is_file() and "汇总" in p.name),
+        key=lambda p: p.name,
+    )
+
+
+def _history_day_folder(key: str) -> Path:
+    m = _DAY_KEY_RE.match(str(key or "").replace("\\", "/").strip())
+    if not m:
+        raise ValueError("日期无效")
+    folder = _match_root() / m.group(1) / m.group(2)
+    if not folder.is_dir():
+        raise ValueError("没有这一天的匹配目录")
+    return folder
+
+
+def history_push_days() -> dict:
+    root = _match_root()
+    days: list[dict] = []
+    if root.is_dir():
+        folders: list[Path] = []
+        for month in root.iterdir():
+            if not month.is_dir() or not month.name.endswith("月"):
+                continue
+            for d in month.iterdir():
+                if d.is_dir() and _DAY_FOLDER_RE.match(d.name) and _summary_zips(d):
+                    folders.append(d)
+        folders.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for d in folders[:60]:
+            zips = _summary_zips(d)
+            latest = max(p.stat().st_mtime for p in zips)
+            try:
+                mon = int(d.parent.name.replace("月", ""))
+                dayn = int(d.name.split(".")[1])
+                year = datetime.fromtimestamp(latest).year
+                iso = datetime(year, mon, dayn).strftime("%Y-%m-%d")
+            except ValueError:
+                iso = datetime.fromtimestamp(latest).strftime("%Y-%m-%d")
+            days.append({
+                "key": f"{d.parent.name}/{d.name}",
+                "label": f"{d.parent.name} {d.name}",
+                "iso": iso,
+                "mtime": datetime.fromtimestamp(latest).strftime("%m-%d %H:%M"),
+                "zips": [
+                    {"name": p.name, "size_h": fmt_size(p.stat().st_size).strip()}
+                    for p in zips
+                ],
+            })
+    return {"days": days}
+
+
+def history_push_preview(key: str) -> dict:
+    from send_feishu import _zip_xlsx_bytes, extract_shop, match_shop_users
+    cfg = load_cfg()
+    folder = _history_day_folder(key)
+    zips = _summary_zips(folder)
+    shops: dict[str, dict] = {}
+    for zp in zips:
+        for name, _raw in _zip_xlsx_bytes(zp):
+            shop = extract_shop(name) or name
+            rec = shops.setdefault(shop, {"shop": shop, "files": [], "users": [], "zip": zp.name})
+            if name not in rec["files"]:
+                rec["files"].append(name)
+            for _s, user in match_shop_users(cfg, name):
+                if user not in rec["users"]:
+                    rec["users"].append(user)
+    mapped = [x for x in shops.values() if x["users"]]
+    mapped.sort(key=lambda x: x["shop"])
+    return {
+        "key": f"{folder.parent.name}/{folder.name}",
+        "zips": [{"name": p.name, "size_h": fmt_size(p.stat().st_size).strip()} for p in zips],
+        "shops": mapped,
+        "skipped": sum(1 for x in shops.values() if not x["users"]),
+        "summary_a_to": _open_id_of(cfg, str(cfg.get("feishu_summary_a_to") or "")),
+        "copy_to": _name_list(cfg.get("feishu_copy_to")),
+    }
+
+
+def _pick_history_zips(folder: Path, packs: list, *, require_pack: bool = True) -> list[Path]:
+    zips = _summary_zips(folder)
+    tags = {str(x).strip().upper() for x in (packs or []) if str(x).strip()}
+    if not tags:
+        if require_pack:
+            raise ValueError("请至少勾选汇总A或汇总B")
+        picked = zips
+    elif tags >= {"A", "B"}:
+        picked = zips
+    else:
+        picked = []
+        if "A" in tags:
+            picked.extend(p for p in zips if "汇总A" in p.name)
+        if "B" in tags:
+            picked.extend(p for p in zips if "汇总B" in p.name)
+    if not picked:
+        raise ValueError("这一天没有符合条件的汇总 ZIP")
+    return picked
+
+
+def history_push(body: dict) -> dict:
+    from send_feishu import notify_shop_zips, notify_zip
+    key = str(body.get("day") or "").strip()
+    mode = str(body.get("mode") or "shops").strip()
+    folder = _history_day_folder(key)
+    zips = _pick_history_zips(
+        folder, body.get("packs") or [],
+        require_pack=(mode != "shops"),
+    )
+    cfg = load_cfg()
+    label = f"{folder.parent.name} {folder.name}"
+    if mode == "shops":
+        only = [str(x).strip() for x in (body.get("shops") or []) if str(x).strip()]
+        if not only:
+            raise ValueError("请勾选要补发的店")
+        notify_shop_zips(cfg, zips, only_shops=only)
+        return {"ok": True, "msg": f"已补发 {label} 按店私聊（{len(only)} 家店，含抄送，不进群）"}
+    to = str(body.get("to") or "").strip()
+    if mode == "summary_a":
+        to = to or str(cfg.get("feishu_summary_a_to") or "").strip()
+        a_zips = [p for p in zips if "汇总A" in p.name]
+        if not a_zips:
+            raise ValueError("没有汇总A")
+        if not to:
+            raise ValueError("请填写汇总A接收人")
+        for p in a_zips:
+            notify_zip(cfg, p, text=f"核验汇总A（补发 {label}）：{p.name}",
+                       log_ok="飞书已补发汇总A", to=to)
+        return {"ok": True, "msg": f"已把 {label} 汇总A发给 {to}"}
+    if mode == "zip":
+        if not to:
+            raise ValueError("整包补发请填写接收人姓名")
+        for p in zips:
+            notify_zip(cfg, p, text=f"核验汇总补发（{label}）：{p.name}",
+                       log_ok="飞书已补发ZIP", to=to)
+        return {"ok": True, "msg": f"已把 {label} 所选 ZIP 发给 {to}"}
+    raise ValueError("未知推送方式")
+
+
+_ROW_COST = {
+    "enhance": 0.25,
+    "contact": 0.25,
+    "email": 40,
+    "tracerfy": 1,
+    "precheck": 1,
+    "numbers": 0.0002,
+}
+
+
+def _remain_rows(total, per_row):
+    try:
+        t = float(total)
+        p = float(per_row)
+    except (TypeError, ValueError):
+        return None
+    if p <= 0:
+        return None
+    return max(0, int(t / p))
+
+
+def _public_fund_item(it: dict) -> dict:
+    row = dict(it) if isinstance(it, dict) else {}
+    row["name"] = mask_public(row.get("name") or "")
+    accts = []
+    for a in row.get("accounts") or []:
+        if not isinstance(a, dict):
+            continue
+        one = dict(a)
+        one["label"] = str(one.get("label") or "账号")
+        one.pop("path", None)
+        one.pop("token", None)
+        one.pop("error_raw", None)
+        if one.get("error"):
+            one["error"] = "查询失败"
+        accts.append(one)
+    row["accounts"] = accts
+    if row.get("error"):
+        row["error"] = "未查到" if row["error"] not in ("未配置", "未使用付费接口") else row["error"]
+    fid = str(row.get("id") or "")
+    if row.get("remain_rows") is None and row.get("ok") and row.get("total") is not None:
+        per = row.get("per_row") if row.get("per_row") not in (None, "") else _ROW_COST.get(fid)
+        row["remain_rows"] = _remain_rows(row.get("total"), per)
+    return row
+
+
+def _funds_today() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _fund_item_ok(it: dict) -> bool:
+    return bool(it.get("ok")) and it.get("total") is not None
+
+
+def _read_funds_cache() -> dict:
+    try:
+        data = json.loads(FUNDS_CACHE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_funds_cache(data: dict) -> None:
+    tmp = FUNDS_CACHE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(FUNDS_CACHE)
+
+
+def _funds_pending(items: list) -> list[str]:
+    have = {str(it.get("id") or "") for it in items if isinstance(it, dict)}
+    pending = [str(it.get("id") or "") for it in items
+               if isinstance(it, dict) and str(it.get("id") or "") and not _fund_item_ok(it)]
+    for fid in _FUNDS_IDS:
+        if fid not in have:
+            pending.append(fid)
+    out = []
+    for fid in pending:
+        if fid and fid not in out:
+            out.append(fid)
+    return out
+
+
+def _merge_fund_items(old: list, new: list) -> list:
+    by_id = {}
+    order = []
+    for it in list(old or []) + list(new or []):
+        if not isinstance(it, dict):
+            continue
+        fid = str(it.get("id") or "")
+        if not fid:
+            continue
+        prev = by_id.get(fid)
+        if prev and _fund_item_ok(prev) and not _fund_item_ok(it):
+            continue
+        if fid not in by_id:
+            order.append(fid)
+        by_id[fid] = it
+    ranked = [fid for fid in _FUNDS_IDS if fid in by_id]
+    ranked += [fid for fid in order if fid not in ranked]
+    return [by_id[fid] for fid in ranked]
+
+
+def _fetch_funds_live() -> dict:
+    cfg = load_cfg()
+    mbase = (cfg.get("matching_url") or "http://127.0.0.1:5000").rstrip("/")
+    dbase = (cfg.get("detect_url") or "http://127.0.0.1:8848").rstrip("/")
+    m, _ = get_json(f"{mbase}/api/funds", 25)
+    d, _ = get_json(f"{dbase}/api/funds", 25)
+    items = []
+    if isinstance(m, dict):
+        items.extend(_public_fund_item(x) for x in (m.get("items") or []) if isinstance(x, dict))
+    if isinstance(d, dict):
+        items.extend(_public_fund_item(x) for x in (d.get("items") or []) if isinstance(x, dict))
+    merged = []
+    for it in items:
+        fid = str(it.get("id") or "")
+        if fid == "contact":
+            continue
+        if fid == "enhance":
+            it["name"] = "详细地址 / 联系方式"
+        merged.append(it)
+    merged = _fill_easymail_from_web(merged)
+    return {
+        "items": merged,
+        "matching_up": bool(m),
+        "detect_up": bool(d),
+    }
+
+
+def _matching_data_dir() -> str:
+    exe = Path((load_cfg().get("matching_exe") or r"E:\数据匹配系统\DataMatching.exe"))
+    sidecar = exe.parent / "DataMatching.datadir"
+    try:
+        if sidecar.is_file():
+            d = sidecar.read_text(encoding="utf-8-sig").strip().strip('"').strip("'")
+            if d:
+                return d
+    except Exception:
+        pass
+    return str(exe.parent / "data")
+
+
+def _fill_easymail_from_web(items: list) -> list:
+    if any(str(it.get("id") or "") == "enhance" and _fund_item_ok(it) for it in items):
+        return items
+    data_dir = _matching_data_dir()
+    os.environ["DATAMATCHING_DATA_DIR"] = data_dir
+    src = str((HERE.parent / "Data Matching").resolve())
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    try:
+        import api_keys
+        from easymail_client import EasyMailClient, get_web_balance
+        accts = api_keys._accounts("easymail") or []
+        a = accts[0] if accts else {}
+        url = str(a.get("base_url") or "").strip() or "https://api.easymail-sz.com/api/v1"
+        client = EasyMailClient(base_url=url, api_key=str(a.get("api_key") or "web"))
+        bal = get_web_balance(client.web_origin(), str(a.get("web_account") or "").strip())
+    except Exception:
+        return items
+    if not bal.get("ok"):
+        return items
+    row = _public_fund_item({
+        "id": "enhance",
+        "name": "详细地址 / 联系方式",
+        "unit": "元",
+        "ok": True,
+        "total": bal.get("balance"),
+        "per_row": 0.25,
+        "remain_rows": _remain_rows(bal.get("balance"), 0.25),
+        "accounts": [{"label": "账号1", "ok": True, "balance": bal.get("balance")}],
+        "error": "",
+    })
+    row["name"] = "详细地址 / 联系方式"
+    out, done = [], False
+    for it in items:
+        if str(it.get("id") or "") == "enhance":
+            out.append(row)
+            done = True
+        else:
+            out.append(it)
+    if not done:
+        out.insert(0, row)
+    return out
+
+
+def refresh_funds_cache() -> dict:
+    live = _fetch_funds_live()
+    with _FUNDS_LOCK:
+        cache = _read_funds_cache()
+        day = _funds_today()
+        old = cache.get("items") or [] if cache.get("day") == day else []
+        items = _merge_fund_items(old, live.get("items") or [])
+        out = {
+            "ok": True,
+            "day": day,
+            "items": items,
+            "matching_up": live.get("matching_up"),
+            "detect_up": live.get("detect_up"),
+            "queried_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "pending": _funds_pending(items),
+        }
+        _write_funds_cache(out)
+        return out
+
+
+def funds_board(refresh: bool = False) -> dict:
+    from funds import RERUN_STEPS, read_wait
+    day = _funds_today()
+    if refresh:
+        cache = refresh_funds_cache()
+    else:
+        with _FUNDS_LOCK:
+            cache = _read_funds_cache()
+        if cache.get("day") != day:
+            cache = {
+                "ok": True,
+                "day": day,
+                "items": [],
+                "matching_up": False,
+                "detect_up": False,
+                "queried_at": "",
+                "pending": list(_FUNDS_IDS),
+            }
+    wait = read_wait()
+    if isinstance(wait, dict) and wait.get("step"):
+        wait = dict(wait)
+        wait["step"] = mask_public(wait["step"])
+    return {
+        "ok": True,
+        "items": cache.get("items") or [],
+        "waiting": wait,
+        "steps": [{"id": k, "name": n} for k, n in RERUN_STEPS],
+        "matching_up": bool(cache.get("matching_up")),
+        "detect_up": bool(cache.get("detect_up")),
+        "day": cache.get("day") or day,
+        "queried_at": cache.get("queried_at") or "",
+        "pending": cache.get("pending") or _funds_pending(cache.get("items") or []),
+    }
+
+
+def _funds_worker():
+    while True:
+        try:
+            cache = _read_funds_cache()
+            day = _funds_today()
+            stale = cache.get("day") != day or not cache.get("queried_at")
+            pending = True if stale else bool(cache.get("pending"))
+            if stale or pending:
+                refresh_funds_cache()
+                cache = _read_funds_cache()
+                pending = bool(cache.get("pending"))
+            time.sleep(_FUNDS_RETRY_SEC if pending else 300)
+        except Exception:
+            time.sleep(60)
+
+
+def rerun_from_step(body: dict) -> dict:
+    from funds import RERUN_STEPS
+    key = str(body.get("from") or body.get("step") or "").strip().lower()
+    names = dict(RERUN_STEPS)
+    if key not in names:
+        raise ValueError("请选择从哪一步重跑")
+    (HERE / "rerun-from.txt").write_text(key, encoding="utf-8")
+    msg = restart_daily_pipeline()
+    return {
+        "ok": True,
+        "from": key,
+        "name": names[key],
+        "msg": f"将从「{names[key]}」重跑后面整条。" + (msg.get("msg") or ""),
+    }
+
+
+def _pythonw() -> Path:
+    py = Path(sys.executable)
+    if py.name.lower() == "python.exe":
+        alt = py.with_name("pythonw.exe")
+        if alt.is_file():
+            return alt
+    return py
+
+
+def _port_busy(port: int = PORT) -> bool:
+    import socket
+    s = socket.socket()
+    s.settimeout(0.3)
+    try:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+    finally:
+        s.close()
+
+
+def restart_dashboard() -> dict:
+    """立刻回包，再拉起新看板并退出当前进程。"""
+    import subprocess
+    import threading
+
+    py = _pythonw()
+    script = str(HERE / "dashboard.py")
+    flags = 0
+    if os.name == "nt":
+        flags = 0x00000008 | 0x00000200 | 0x08000000
+
+    def work():
+        time.sleep(0.35)
+        try:
+            subprocess.Popen(
+                [str(py), script, "--relaunch"],
+                cwd=str(HERE),
+                close_fds=True,
+                creationflags=flags,
+            )
+        except Exception:
+            pass
+        os._exit(0)
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"ok": True, "msg": "进度看板正在重启，几秒后自动刷新"}
+
+
 def restart_daily_pipeline() -> dict:
     """立刻返回，后台杀旧进程再拉起，避免 HTTP 线程卡住把页面拖死。"""
     import subprocess
@@ -919,8 +1503,24 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/feishu-settings":
             self._json(200, feishu_settings())
             return
+        if path == "/api/feishu-history":
+            try:
+                qs = parse_qs(urlparse(self.path).query)
+                day = (qs.get("day") or [""])[0].strip()
+                self._json(200, history_push_preview(day) if day else history_push_days())
+            except Exception as e:
+                self._json(400, {"error": str(e)})
+            return
         if path == "/api/pipeline-settings":
             self._json(200, pipeline_settings())
+            return
+        if path == "/api/funds-board":
+            try:
+                qs = parse_qs(urlparse(self.path).query)
+                fresh = (qs.get("refresh") or [""])[0].strip().lower() in ("1", "true", "yes")
+                self._json(200, funds_board(refresh=fresh))
+            except Exception as e:
+                self._json(400, {"error": str(e)})
             return
         html = HTML_PATH.read_bytes() if HTML_PATH.is_file() else b"<p>missing dashboard.html</p>"
         self._send(200, html, "text/html; charset=utf-8")
@@ -939,9 +1539,27 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._json(400, {"error": str(e)})
             return
+        if path == "/api/restart-dashboard":
+            try:
+                self._json(200, restart_dashboard())
+            except Exception as e:
+                self._json(400, {"error": str(e)})
+            return
         if path == "/api/restart-daily":
             try:
                 self._json(200, restart_daily_pipeline())
+            except Exception as e:
+                self._json(400, {"error": str(e)})
+            return
+        if path == "/api/rerun":
+            try:
+                self._json(200, rerun_from_step(self._read_json()))
+            except Exception as e:
+                self._json(400, {"error": str(e)})
+            return
+        if path == "/api/feishu-history-push":
+            try:
+                self._json(200, history_push(self._read_json()))
             except Exception as e:
                 self._json(400, {"error": str(e)})
             return
@@ -954,7 +1572,7 @@ class Handler(BaseHTTPRequestHandler):
                     log_ok="飞书已发送告警测试",
                 )
                 if not ok:
-                    self._json(400, {"error": "发送失败。把接收人加进告警应用可用范围，并在飞书里先搜这个机器人开一次会话。"})
+                    self._json(400, {"error": "发送失败。把接收人加进告警应用可用范围。"})
                     return
                 self._json(200, {"ok": True})
             except Exception as e:
@@ -965,8 +1583,15 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     import atexit
+    if "--relaunch" in sys.argv:
+        for _ in range(50):
+            if not _port_busy(PORT):
+                break
+            time.sleep(0.2)
+        time.sleep(0.2)
     write_pid(DASH_PID)
     atexit.register(lambda: clear_pid(DASH_PID, os.getpid()))
+    threading.Thread(target=_funds_worker, name="funds-daily", daemon=True).start()
     httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     print(f"作业监视  http://127.0.0.1:{PORT}")
     try:

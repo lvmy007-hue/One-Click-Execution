@@ -2,6 +2,10 @@ config.json
 *.log
 *.pid
 *.ok
+funds-wait.json
+funds-board.json
+funds-board.tmp
+rerun-from.txt
 __pycache__/
 *.pyc
 .DS_Store

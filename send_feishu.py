@@ -78,7 +78,11 @@ def _api(http: requests.Session, token: str, method: str, url: str, **kw) -> dic
     except Exception:
         raise FeishuError(f"飞书 HTTP {r.status_code}: {r.text[:200]}")
     if data.get("code") != 0:
-        raise FeishuError(data.get("msg") or f"飞书错误 {data}")
+        msg = str(data.get("msg") or data)
+        code = data.get("code")
+        if code not in (None, 0) and str(code) not in msg:
+            msg = f"{msg} ({code})"
+        raise FeishuError(msg)
     return data
 
 
@@ -245,49 +249,105 @@ def match_shop_user(cfg: dict, filename: str) -> tuple[str, str] | None:
     return hits[0] if hits else None
 
 
-def _contact_users_by_name(http: requests.Session, token: str) -> dict[str, str]:
-    found: dict[str, str] = {}
+_DIR_CACHE: dict[str, tuple[dict[str, str], dict[str, str]]] = {}
+
+
+def _placeholder_name(name: str) -> bool:
+    return bool(re.fullmatch(r"用户\d+", str(name or "").strip()))
+
+
+def _unavailable(err: object) -> bool:
+    text = str(err).lower()
+    return "no availability" in text or "230013" in text or "no user authority" in text
+
+
+def _forget_directory(token: str | None = None) -> None:
+    if token is None:
+        _DIR_CACHE.clear()
+        return
+    suffix = token[-24:]
+    for key in [k for k in _DIR_CACHE if k.endswith(suffix)]:
+        _DIR_CACHE.pop(key, None)
+
+
+def _iter_scope_ids(http: requests.Session, token: str) -> list[str]:
+    uids: list[str] = []
     page = ""
     while True:
-        params = {
-            "department_id": "0",
-            "department_id_type": "department_id",
-            "user_id_type": "open_id",
-            "page_size": 50,
-        }
+        params = {"user_id_type": "open_id", "page_size": 50}
         if page:
             params["page_token"] = page
         try:
-            data = _api(http, token, "GET", f"{OPEN}/contact/v3/users/find_by_department", params=params)
+            sc = _api(http, token, "GET", f"{OPEN}/contact/v3/scopes", params=params)
         except Exception:
             break
-        for it in (data.get("data") or {}).get("items") or []:
-            name = str(it.get("name") or "").strip()
-            oid = str(it.get("open_id") or it.get("user_id") or "").strip()
-            if name and oid:
-                found[name] = oid
-        page = (data.get("data") or {}).get("page_token") or ""
+        data = sc.get("data") or {}
+        uids.extend(str(x).strip() for x in (data.get("user_ids") or []) if str(x).strip())
+        page = str(data.get("page_token") or "")
         if not page:
             break
-    if found:
-        return found
-    try:
-        scopes = _api(http, token, "GET", f"{OPEN}/contact/v3/scopes",
-                      params={"user_id_type": "open_id", "page_size": 50})
-    except Exception:
-        return found
-    for uid in (scopes.get("data") or {}).get("user_ids") or []:
+    return uids
+
+
+def _fetch_directory(http: requests.Session, token: str) -> tuple[dict[str, str], dict[str, str]]:
+    """应用可用范围：姓名→open_id（重名不收录）、open_id→姓名。"""
+    by_oid: dict[str, str] = {}
+    name_to_oids: dict[str, list[str]] = {}
+    for uid in _iter_scope_ids(http, token):
+        name = ""
+        oid = uid
         try:
             one = _api(http, token, "GET", f"{OPEN}/contact/v3/users/{uid}",
                        params={"user_id_type": "open_id"})
+            user = (one.get("data") or {}).get("user") or {}
+            oid = str(user.get("open_id") or uid).strip()
+            name = str(user.get("name") or user.get("nickname") or "").strip()
         except Exception:
-            continue
-        user = (one.get("data") or {}).get("user") or {}
-        name = str(user.get("name") or user.get("nickname") or "").strip()
-        oid = str(user.get("open_id") or uid).strip()
+            pass
+        if oid:
+            by_oid[oid] = name
         if name and oid:
-            found[name] = oid
-    return found
+            name_to_oids.setdefault(name, []).append(oid)
+    by_name: dict[str, str] = {}
+    for name, oids in name_to_oids.items():
+        uniq = list(dict.fromkeys(oids))
+        if len(uniq) == 1:
+            by_name[name] = uniq[0]
+    return by_name, by_oid
+
+
+def _directory(http: requests.Session, token: str, force: bool = False
+               ) -> tuple[dict[str, str], dict[str, str]]:
+    key = f"{id(http)}:{token[-24:]}"
+    if force:
+        _DIR_CACHE.pop(key, None)
+    hit = _DIR_CACHE.get(key)
+    if hit is None:
+        hit = _fetch_directory(http, token)
+        _DIR_CACHE[key] = hit
+    return hit
+
+
+def _contact_users_by_name(http: requests.Session, token: str) -> dict[str, str]:
+    by_name, _by_oid = _directory(http, token)
+    return dict(by_name)
+
+
+def _live_oid_for_name(cfg: dict, feishu_name: str, by_name: dict[str, str]) -> str:
+    for alias in lookup_name_aliases(cfg, feishu_name):
+        oid = str(by_name.get(alias) or "").strip()
+        if oid:
+            return oid
+    return ""
+
+
+def _oid_name_ok(cfg: dict, want: str, live_name: str) -> bool:
+    live = str(live_name or "").strip()
+    if not live:
+        return True
+    if live == want or live in lookup_name_aliases(cfg, want):
+        return True
+    return _placeholder_name(live)
 
 
 def lookup_name_aliases(cfg: dict, feishu_name: str) -> list[str]:
@@ -314,40 +374,63 @@ def lookup_name_aliases(cfg: dict, feishu_name: str) -> list[str]:
 
 
 def resolve_open_id(http: requests.Session, token: str, cfg: dict, feishu_name: str,
-                    cache_key: str = "feishu_open_ids", use_chat: bool = True) -> str:
-    cache = cfg.get(cache_key) or {}
-    for alias in lookup_name_aliases(cfg, feishu_name):
-        cached = str(cache.get(alias) or "").strip()
-        if cached:
-            return cached
+                    cache_key: str = "feishu_open_ids", use_chat: bool = True,
+                    skip_cache: bool = False) -> str:
+    who = str(feishu_name or "").strip()
+    if who.startswith("ou_") or who.startswith("on_"):
+        return who
+    by_name, by_oid = _directory(http, token)
+    live = _live_oid_for_name(cfg, feishu_name, by_name)
+    if live:
+        save_open_id(cache_key, feishu_name, live, cfg)
+        return live
     chat_id = str(cfg.get("feishu_chat_id") or "").strip()
     if use_chat and chat_id:
         try:
             page = ""
+            want = set(lookup_name_aliases(cfg, feishu_name))
             while True:
                 params = {"member_id_type": "open_id", "page_size": 100}
                 if page:
                     params["page_token"] = page
                 data = _api(http, token, "GET", f"{OPEN}/im/v1/chats/{chat_id}/members", params=params)
-                want = set(lookup_name_aliases(cfg, feishu_name))
                 for it in (data.get("data") or {}).get("items") or []:
-                    if str(it.get("name") or "").strip() in want:
-                        return str(it.get("member_id") or "")
+                    if str(it.get("name") or "").strip() not in want:
+                        continue
+                    member_id = str(it.get("member_id") or "").strip()
+                    if member_id and (not by_oid or member_id in by_oid):
+                        save_open_id(cache_key, feishu_name, member_id, cfg)
+                        return member_id
                 page = (data.get("data") or {}).get("page_token") or ""
                 if not page:
                     break
         except Exception:
             pass
-    named = _contact_users_by_name(http, token)
-    for alias in lookup_name_aliases(cfg, feishu_name):
-        oid = str(named.get(alias) or "").strip()
-        if oid:
-            return oid
+    if not skip_cache:
+        cache = cfg.get(cache_key) or {}
+        for alias in lookup_name_aliases(cfg, feishu_name):
+            cached = str(cache.get(alias) or "").strip()
+            if not cached:
+                continue
+            if by_oid and cached not in by_oid:
+                continue
+            live_name = by_oid.get(cached, "")
+            if live_name and not _oid_name_ok(cfg, feishu_name, live_name):
+                continue
+            return cached
     raise FeishuError(f"找不到飞书用户 {feishu_name}，对方需在企业通讯录且已加入应用可用范围")
 
 
-def save_open_id(cache_key: str, name: str, oid: str) -> None:
-    if not DEFAULT_CFG.is_file() or not name or not oid:
+def save_open_id(cache_key: str, name: str, oid: str, cfg: dict | None = None) -> None:
+    if not name or not oid:
+        return
+    if cfg is not None:
+        bucket = cfg.get(cache_key)
+        if not isinstance(bucket, dict):
+            bucket = {}
+            cfg[cache_key] = bucket
+        bucket[name] = oid
+    if not DEFAULT_CFG.is_file():
         return
     try:
         data = json.loads(DEFAULT_CFG.read_text(encoding="utf-8"))
@@ -363,13 +446,102 @@ def save_open_id(cache_key: str, name: str, oid: str) -> None:
         pass
 
 
+def drop_open_id(cache_key: str, name: str, cfg: dict | None = None) -> None:
+    if cfg is not None:
+        bucket = cfg.get(cache_key)
+        if isinstance(bucket, dict):
+            bucket.pop(name, None)
+    if not DEFAULT_CFG.is_file() or not name:
+        return
+    try:
+        data = json.loads(DEFAULT_CFG.read_text(encoding="utf-8"))
+        cache = data.get(cache_key) or {}
+        if not isinstance(cache, dict) or name not in cache:
+            return
+        cache.pop(name, None)
+        data[cache_key] = cache
+        DEFAULT_CFG.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _wanted_push_names(cfg: dict) -> list[str]:
+    names: list[str] = []
+    for users in shop_user_map(cfg).values():
+        names.extend(users)
+    names.extend(copy_user_names(cfg))
+    for key in ("feishu_summary_a_to", "feishu_enhance_to"):
+        names.extend(names_of(cfg, key))
+    out: list[str] = []
+    for name in names:
+        who = str(name or "").strip()
+        if who and who not in out and not who.startswith("ou_") and not who.startswith("on_"):
+            out.append(who)
+    return out
+
+
+def sync_open_ids_from_scope(http: requests.Session, token: str, cfg: dict,
+                             cache_key: str = "feishu_open_ids") -> None:
+    """每次发送前用可用名单校正对照，丢掉失效/绑错的 open_id。"""
+    by_name, by_oid = _directory(http, token)
+    if not by_oid:
+        log("飞书可用名单为空，跳过 open_id 校对")
+        return
+    cache = cfg.get(cache_key)
+    if not isinstance(cache, dict):
+        cache = {}
+        cfg[cache_key] = cache
+    for name in _wanted_push_names(cfg):
+        live = _live_oid_for_name(cfg, name, by_name)
+        old = str(cache.get(name) or "").strip()
+        if live and live != old:
+            if old:
+                log("飞书 open_id 已按可用名单纠正", name)
+            save_open_id(cache_key, name, live, cfg)
+        elif old and old not in by_oid:
+            log("飞书 open_id 已不在可用范围，已清除", name)
+            drop_open_id(cache_key, name, cfg)
+    for name, oid in list(cache.items()):
+        oid = str(oid or "").strip()
+        if oid and oid not in by_oid:
+            log("飞书 open_id 已不在可用范围，已清除", name)
+            drop_open_id(cache_key, name, cfg)
+
+
+def send_to_person(http: requests.Session, token: str, cfg: dict, name: str,
+                   oid_cache: dict[str, str], send_fn, cache_key: str = "feishu_open_ids") -> str:
+    """按可用名单取 open_id 再发送；NO availability 时丢掉旧 ID 重查一次。"""
+    oid = oid_cache.get(name) or resolve_open_id(http, token, cfg, name, cache_key=cache_key)
+    oid_cache[name] = oid
+    try:
+        send_fn(oid)
+        save_open_id(cache_key, name, oid, cfg)
+        return oid
+    except Exception as e:
+        if not _unavailable(e):
+            raise
+        log("飞书 open_id 失效，按可用名单重查", name)
+        drop_open_id(cache_key, name, cfg)
+        oid_cache.pop(name, None)
+        _forget_directory(token)
+        new_oid = resolve_open_id(
+            http, token, cfg, name, cache_key=cache_key, skip_cache=True,
+        )
+        if not new_oid or new_oid == oid:
+            raise FeishuError(f"{name} 不在应用可用范围（{e}）") from e
+        oid_cache[name] = new_oid
+        send_fn(new_oid)
+        save_open_id(cache_key, name, new_oid, cfg)
+        return new_oid
+
+
 def resolve_alert_open_id(http: requests.Session, token: str, cfg: dict, feishu_name: str) -> str:
     """告警应用的 open_id 不能和表格机器人混用。"""
     oid = resolve_open_id(
         http, token, cfg, feishu_name,
         cache_key="feishu_alert_open_ids", use_chat=False,
     )
-    save_open_id("feishu_alert_open_ids", feishu_name, oid)
+    save_open_id("feishu_alert_open_ids", feishu_name, oid, cfg)
     return oid
 
 
@@ -385,20 +557,20 @@ def _name_aliases(name: str) -> list[str]:
 
 def resolve_alert_receiver(http: requests.Session, alert_token: str, cfg: dict,
                            feishu_name: str) -> tuple[str, str]:
-    """返回 (receive_id, receive_id_type)。优先告警 open_id，其次跨应用 union_id。"""
-    alert_cache = cfg.get("feishu_alert_open_ids") or {}
+    """返回 (receive_id, receive_id_type)。优先告警可用名单，其次跨应用 union_id。"""
+    try:
+        oid = resolve_alert_open_id(http, alert_token, cfg, feishu_name)
+        return oid, "open_id"
+    except Exception:
+        pass
     union_cache = cfg.get("feishu_union_ids") or {}
     push_cache = cfg.get("feishu_open_ids") or {}
-    for alias in _name_aliases(feishu_name):
-        oid = str(alert_cache.get(alias) or "").strip()
-        if oid:
-            return oid, "open_id"
+    for alias in lookup_name_aliases(cfg, feishu_name):
         uid = str(union_cache.get(alias) or "").strip()
         if uid:
             return uid, "union_id"
-    # 用表格机器人缓存的 open_id 换 union_id（同企业跨应用可用）
     push_oid = ""
-    for alias in _name_aliases(feishu_name):
+    for alias in lookup_name_aliases(cfg, feishu_name):
         push_oid = str(push_cache.get(alias) or "").strip()
         if push_oid:
             break
@@ -413,23 +585,19 @@ def resolve_alert_receiver(http: requests.Session, alert_token: str, cfg: dict,
             user = (one.get("data") or {}).get("user") or {}
             union = str(user.get("union_id") or "").strip()
             if union:
-                save_open_id("feishu_union_ids", feishu_name, union)
+                save_open_id("feishu_union_ids", feishu_name, union, cfg)
                 return union, "union_id"
         except Exception:
             pass
-    try:
-        oid = resolve_alert_open_id(http, alert_token, cfg, feishu_name)
-        return oid, "open_id"
-    except Exception:
-        for alias in _name_aliases(feishu_name):
-            if alias == feishu_name:
-                continue
-            try:
-                oid = resolve_alert_open_id(http, alert_token, cfg, alias)
-                save_open_id("feishu_alert_open_ids", feishu_name, oid)
-                return oid, "open_id"
-            except Exception:
-                continue
+    for alias in lookup_name_aliases(cfg, feishu_name):
+        if alias == feishu_name:
+            continue
+        try:
+            oid = resolve_alert_open_id(http, alert_token, cfg, alias)
+            save_open_id("feishu_alert_open_ids", feishu_name, oid, cfg)
+            return oid, "open_id"
+        except Exception:
+            continue
     raise FeishuError(
         f"找不到飞书用户 {feishu_name}。"
         "告警应用需开通通讯录只读，或先用表格机器人缓存过该用户。"
@@ -459,7 +627,7 @@ def notify_summary_a_zip(cfg: dict, zip_paths: list[Path]) -> None:
         return
     paths = [Path(p) for p in zip_paths if p and Path(p).is_file() and "汇总A" in Path(p).name]
     if not paths:
-        log("没有汇总A ZIP，跳过发给", who)
+        alert_skip(cfg, "汇总A推送已跳过", f"没有汇总A ZIP，未发给 {who}")
         return
     for path in paths:
         notify_zip(
@@ -500,6 +668,8 @@ def notify_shop_zips(cfg: dict, zip_paths: list[Path],
     # user -> {filename: (bytes, shop)}
     per_user: dict[str, dict[str, tuple[bytes, str]]] = {}
     skipped = 0
+    skipped_names: list[str] = []
+    send_fails: list[str] = []
     for zp in paths:
         for name, raw in _zip_xlsx_bytes(zp):
             shop_name = extract_shop(name)
@@ -508,6 +678,7 @@ def notify_shop_zips(cfg: dict, zip_paths: list[Path],
             hits = match_shop_users(cfg, name)
             if not hits:
                 skipped += 1
+                skipped_names.append(name)
                 log("按店发送跳过（无对照）", name)
                 continue
             for shop, user in hits:
@@ -515,6 +686,14 @@ def notify_shop_zips(cfg: dict, zip_paths: list[Path],
                 if name not in bucket:
                     bucket[name] = (raw, shop)
 
+    if skipped_names:
+        shown = "、".join(skipped_names[:20])
+        more = f" 等 {len(skipped_names)} 张" if len(skipped_names) > 20 else ""
+        alert_skip(
+            cfg, "按店推送已跳过（无对照）",
+            shown + more,
+            extra="这些表没有店名对照，未发给任何人；有对照的店仍会发。",
+        )
     if not per_user:
         log("按店发送结束", "已发 0", f"无对照 {skipped}")
         return
@@ -528,6 +707,7 @@ def notify_shop_zips(cfg: dict, zip_paths: list[Path],
     app_id, secret, _ = feishu_cfg(cfg)
     http = _http()
     token = tenant_token(http, app_id, secret)
+    sync_open_ids_from_scope(http, token, cfg)
     oid_cache: dict[str, str] = {}
     sent = 0
     day = datetime.now().strftime("%Y%m%d")
@@ -537,8 +717,8 @@ def notify_shop_zips(cfg: dict, zip_paths: list[Path],
             shops = sorted({shop for _, shop in files.values()})
             shop_txt = "、".join(shops)
             try:
-                oid = oid_cache.get(user) or resolve_open_id(http, token, cfg, user)
-                oid_cache[user] = oid
+                send_path = None
+                copy_prefix = ""
                 if as_zip:
                     zip_name = f"{_safe_zip_stem(user)}_{day}_{'+'.join(shops[:6])}核验表.zip"
                     if len(shops) > 6:
@@ -549,56 +729,86 @@ def notify_shop_zips(cfg: dict, zip_paths: list[Path],
                             zf.writestr(fname, raw)
                     if zip_path.stat().st_size > MAX_BYTES:
                         log("按人压缩包超过 30MB，跳过", user, zip_path.name, zip_path.stat().st_size)
+                        send_fails.append(f"{user} 压缩包超过 30MB")
                         continue
                     text = f"核验表 ZIP（{shop_txt}）共 {len(files)} 张：{zip_path.name}"
-                    send_text(http, token, oid, text, receive_id_type="open_id")
-                    key = upload_file(http, token, zip_path)
-                    send_file(http, token, oid, key, receive_id_type="open_id")
-                    sent += 1
-                    log("按人已发送ZIP", user, f"{len(files)}张", shop_txt, zip_path.name)
                     send_path = zip_path
                     copy_prefix = f"【抄送】{user}｜{text}"
+
+                    def _send_main(oid, _text=text, _path=zip_path):
+                        send_text(http, token, oid, _text, receive_id_type="open_id")
+                        key = upload_file(http, token, _path)
+                        send_file(http, token, oid, key, receive_id_type="open_id")
+
+                    send_to_person(http, token, cfg, user, oid_cache, _send_main)
+                    sent += 1
+                    log("按人已发送ZIP", user, f"{len(files)}张", shop_txt, zip_path.name)
                 else:
+                    items: list[tuple[str, str, Path]] = []
                     for fname, (raw, shop) in sorted(files.items()):
                         local = tmp_dir / fname
                         local.write_bytes(raw)
-                        text = f"{shop} 核验表：{fname}"
-                        send_text(http, token, oid, text, receive_id_type="open_id")
-                        key = upload_file(http, token, local)
-                        send_file(http, token, oid, key, receive_id_type="open_id")
+                        items.append((fname, shop, local))
+
+                    def _send_main(oid, _items=items):
+                        for fname, shop, local in _items:
+                            send_text(
+                                http, token, oid, f"{shop} 核验表：{fname}",
+                                receive_id_type="open_id",
+                            )
+                            key = upload_file(http, token, local)
+                            send_file(http, token, oid, key, receive_id_type="open_id")
+
+                    send_to_person(http, token, cfg, user, oid_cache, _send_main)
+                    for fname, shop, _local in items:
                         sent += 1
                         log("按店已发送", shop, "→", user, fname)
-                    send_path = None
-                    copy_prefix = ""
+                oid = oid_cache.get(user) or ""
                 for copy_name in copy_user_names(cfg):
                     try:
-                        copy_oid = oid_cache.get(copy_name) or resolve_open_id(http, token, cfg, copy_name)
-                        oid_cache[copy_name] = copy_oid
-                        if copy_oid == oid:
-                            continue
-                        if as_zip and send_path is not None:
-                            send_text(http, token, copy_oid, copy_prefix, receive_id_type="open_id")
-                            copy_key = upload_file(http, token, send_path)
-                            send_file(http, token, copy_oid, copy_key, receive_id_type="open_id")
-                            log("按人已抄送ZIP", user, "→", copy_name, send_path.name)
-                        else:
-                            for fname, (raw, shop) in sorted(files.items()):
-                                local = tmp_dir / fname
+                        def _send_copy(
+                            copy_oid, _oid=oid, _as_zip=as_zip, _send_path=send_path,
+                            _prefix=copy_prefix, _files=files, _tmp=tmp_dir, _user=user,
+                        ):
+                            if copy_oid == _oid:
+                                return
+                            if _as_zip and _send_path is not None:
+                                send_text(http, token, copy_oid, _prefix, receive_id_type="open_id")
+                                copy_key = upload_file(http, token, _send_path)
+                                send_file(http, token, copy_oid, copy_key, receive_id_type="open_id")
+                                return
+                            for fname, (raw, shop) in sorted(_files.items()):
+                                local = _tmp / fname
                                 if not local.is_file():
                                     local.write_bytes(raw)
                                 send_text(
                                     http, token, copy_oid,
-                                    f"【抄送】{shop} → {user}：{fname}",
+                                    f"【抄送】{shop} → {_user}：{fname}",
                                     receive_id_type="open_id",
                                 )
                                 copy_key = upload_file(http, token, local)
                                 send_file(http, token, copy_oid, copy_key, receive_id_type="open_id")
+
+                        send_to_person(http, token, cfg, copy_name, oid_cache, _send_copy)
+                        if oid_cache.get(copy_name) == oid:
+                            continue
+                        if as_zip and send_path is not None:
+                            log("按人已抄送ZIP", user, "→", copy_name, send_path.name)
+                        else:
+                            for fname, (_raw, shop) in sorted(files.items()):
                                 log("按店已抄送", shop, "→", copy_name, fname)
                     except Exception as e:
                         log("按人抄送失败", user, copy_name, e)
             except Exception as e:
                 log("按人发送失败", user, e)
+                send_fails.append(f"{user}：{e}")
     log("按店发送结束", f"已发 {sent}" + (" 人ZIP" if as_zip else " 份表"), f"无对照 {skipped}")
+    if send_fails:
+        alert_skip(
+            cfg, "按店推送部分失败",
+            "；".join(send_fails[:8]),
+            extra="失败的人未发出，其余已发的不受影响。",
+        )
 
 
 def resolve_chat(http: requests.Session, token: str, chat_id: str) -> str:
@@ -631,13 +841,17 @@ def send_zip(cfg: dict, path: Path, text: str = "", log_ok: str = "飞书已发�
     app_id, secret, _ = feishu_cfg(cfg)
     http = _http()
     token = tenant_token(http, app_id, secret)
-    receive_id = resolve_open_id(http, token, cfg, who)
+    sync_open_ids_from_scope(http, token, cfg)
     if not text:
         text = f"店表汇总已完成：{path.name}"
     log("飞书上传", path.name, path.stat().st_size, "字节", "→", who)
-    send_text(http, token, receive_id, text, receive_id_type="open_id")
-    key = upload_file(http, token, path)
-    send_file(http, token, receive_id, key, receive_id_type="open_id")
+
+    def _send(oid, _text=text, _path=path):
+        send_text(http, token, oid, _text, receive_id_type="open_id")
+        key = upload_file(http, token, _path)
+        send_file(http, token, oid, key, receive_id_type="open_id")
+
+    send_to_person(http, token, cfg, who, {}, _send)
     log(log_ok, who)
     return True
 
@@ -655,8 +869,12 @@ def send_text_message(cfg: dict, text: str, log_ok: str = "飞书已发送说明
     app_id, secret, _ = feishu_cfg(cfg)
     http = _http()
     token = tenant_token(http, app_id, secret)
-    oid = resolve_open_id(http, token, cfg, who)
-    send_text(http, token, oid, text, receive_id_type="open_id")
+    sync_open_ids_from_scope(http, token, cfg)
+
+    def _send(oid, _text=text):
+        send_text(http, token, oid, _text, receive_id_type="open_id")
+
+    send_to_person(http, token, cfg, who, {}, _send)
     log(log_ok, who)
     return True
 
@@ -720,6 +938,11 @@ def notify_zip(cfg: dict, path: Path | None, text: str = "",
         send_zip(cfg, path, text=text, log_ok=log_ok, to=who)
     except Exception as e:
         log(fail_log, e)
+        notify_alert(
+            cfg, "文件推送已跳过", str(e),
+            filename=Path(path).name,
+            extra="本地文件已留下，链路继续。",
+        )
         return
     copy_text = f"【抄送】{text}" if text else f"【抄送】{Path(path).name}"
     for copy_name in copy_user_names(cfg):
@@ -753,6 +976,12 @@ def notify_alert(cfg: dict | None, title: str, reason: str,
         send_alert_text(cfg, text)
     except Exception as e:
         log("飞书告警发送失败:", e)
+
+
+def alert_skip(cfg: dict | None, title: str, reason: str, extra: str = "") -> None:
+    """已经跳过的项一律补飞书，不进群。"""
+    log(title + ":", reason)
+    notify_alert(cfg, title, reason, extra=extra)
 
 
 def notify_skipped(cfg: dict | None, stage: str, items: list[tuple[str, str]],
